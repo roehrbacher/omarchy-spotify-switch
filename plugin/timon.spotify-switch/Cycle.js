@@ -17,24 +17,3 @@ function nextDevice(devices, fromId) {
   }
   return null
 }
-
-// Bar glyph for the "icon" setting: a preset name, "U+XXXX", or a glyph of
-// one or two characters (one code point outside the BMP is two). Anything
-// else falls back to the Spotify logo.
-var presets = {
-  "spotify": 0xF1BC,           // nf-fa-spotify (default)
-  "devices": 0xF0FB0,          // nf-md-devices
-  "monitor-speaker": 0xF0F5F   // nf-md-monitor_speaker
-}
-function glyph(value) {
-  var v = String(value === undefined || value === null ? "" : value).trim()
-  var key = v.toLowerCase().replace(/[_ ]/g, "-")
-  if (presets.hasOwnProperty(key)) return String.fromCodePoint(presets[key])
-  var m = /^u\+([0-9a-f]{4,6})$/i.exec(v)
-  if (m) {
-    var cp = parseInt(m[1], 16)
-    if (cp > 0 && cp <= 0x10FFFF) return String.fromCodePoint(cp)
-  }
-  if (v.length > 0 && v.length <= 2) return v
-  return String.fromCodePoint(presets["spotify"])
-}

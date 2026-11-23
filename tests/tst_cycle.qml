@@ -25,15 +25,4 @@ TestCase {
     for (var i = 0; i < 5; i++) { cur = Cycle.nextDevice(five, cur).id; seen.push(cur) }
     compare(seen.join(","), "ar,ks,px,pc,xps")
   }
-
-  function test_glyphDefault() { compare(Cycle.glyph(""), "\uf1bc"); compare(Cycle.glyph(undefined), "\uf1bc") }
-  function test_glyphPresets() {
-    compare(Cycle.glyph("spotify"), "\uf1bc")
-    compare(Cycle.glyph("devices"), String.fromCodePoint(0xF0FB0))
-    compare(Cycle.glyph("monitor-speaker"), String.fromCodePoint(0xF0F5F))
-    compare(Cycle.glyph("Monitor_Speaker"), String.fromCodePoint(0xF0F5F))
-  }
-  function test_glyphCodepoint() { compare(Cycle.glyph("U+F0FB0"), String.fromCodePoint(0xF0FB0)) }
-  function test_glyphLiteral() { compare(Cycle.glyph(String.fromCodePoint(0xF04C3)), String.fromCodePoint(0xF04C3)) }
-  function test_glyphJunk() { compare(Cycle.glyph("not an icon"), "\uf1bc"); compare(Cycle.glyph("U+110000"), "\uf1bc") }
 }

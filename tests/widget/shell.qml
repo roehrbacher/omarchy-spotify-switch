@@ -8,7 +8,6 @@ ShellRoot {
   id: shell
   property var w: null
   property var w2: null
-  property var w3: null
   property bool ok: true
   property int step: 0
 
@@ -33,9 +32,8 @@ ShellRoot {
     Rectangle { id: canvas; anchors.fill: parent; color: "#1e1e2e"
     Rectangle { id: strip; width: parent.width; height: 30; color: "#181825"
       Item { id: slot; x: 300; y: 0; width: 27; height: 30 }
-      // Multiple entries: the same widget twice more, only "icon" differs.
+      // A second entry with a leftover "icon" setting, which is ignored.
       Item { id: slot2; x: 327; y: 0; width: 27; height: 30 }
-      Item { id: slot3; x: 354; y: 0; width: 27; height: 30 }
     }
     // Tooltip stand-in under the icon, like Omarchy's bar tooltip card.
     Rectangle {
@@ -69,8 +67,7 @@ ShellRoot {
     if (c.status !== Component.Ready) { console.log("SW ERR " + c.errorString()); console.log("SW RESULT FAIL"); return }
     w = c.createObject(slot, { bar: barStub })
     w.anchors.centerIn = slot
-    w2 = c.createObject(slot2, { bar: barStub, settings: { icon: "devices" } }); w2.anchors.centerIn = slot2
-    w3 = c.createObject(slot3, { bar: barStub, settings: { icon: "monitor-speaker" } }); w3.anchors.centerIn = slot3
+    w2 = c.createObject(slot2, { bar: barStub, settings: { icon: "spotify" } }); w2.anchors.centerIn = slot2
     t0.start()
   }
   // The first Spotify read is slow (1.5 s in the fake): the cache shows first.
@@ -79,12 +76,13 @@ ShellRoot {
     expect("Spotify read still running (shown without waiting)", w.reading, true)
     expect("icon lit", btn().dimmed, false)
     expect("helper (serve) running", w.helperUp, true)
-    expect("glyph nf-fa-spotify (default)", btn().text, "\uf1bc")
-    expect("2nd entry icon=devices: nf-md-devices", w2.children[0].text, String.fromCodePoint(0xF0FB0))
-    expect("3rd entry icon=monitor-speaker: nf-md-monitor_speaker", w3.children[0].text, String.fromCodePoint(0xF0F5F))
-    expect("all three show the cached device", (w2.shown ? w2.shown.name : "") + "|" + (w3.shown ? w3.shown.name : ""), "XPS|XPS")
-    expect("all three same slot width", w2.children[0].width === btn().width && w3.children[0].width === btn().width, true)
-    console.log("SW geometry: slots " + [btn(), w2.children[0], w3.children[0]].map(function(b) { var p = b.mapToItem(canvas, 0, 0); return Math.round(p.x) + "," + Math.round(p.y) + " " + Math.round(b.width) + "x" + Math.round(b.height) + " glyph " + Math.round(b.glyphPaintedWidth * 10) / 10 + "px wide, " + b.glyphFontSize + "px font, centre error " + Math.round(b.opticalCenterErrorX * 10) / 10 }).join(" | "))
+    expect("glyph nf-md-monitor_speaker (fixed)", btn().text, String.fromCodePoint(0xF0F5F))
+    expect("2nd entry: leftover icon setting ignored", w2.children[0].text, String.fromCodePoint(0xF0F5F))
+    expect("glyph really drawn (Nerd Font found, not a fallback box)", btn().glyphPaintedWidth >= 10, true)
+    expect("no Spotify-logo glyph", btn().text !== "\uf1bc" && w2.children[0].text !== "\uf1bc", true)
+    expect("both entries show the cached device", w2.shown ? w2.shown.name : "", "XPS")
+    expect("both entries same slot width", w2.children[0].width === btn().width, true)
+    console.log("SW geometry: slots " + [btn(), w2.children[0]].map(function(b) { var p = b.mapToItem(canvas, 0, 0); return Math.round(p.x) + "," + Math.round(p.y) + " " + Math.round(b.width) + "x" + Math.round(b.height) + " glyph " + Math.round(b.glyphPaintedWidth * 10) / 10 + "px wide, " + b.glyphFontSize + "px font, centre error " + Math.round(b.opticalCenterErrorX * 10) / 10 }).join(" | "))
     expect("icon slot width (stock BarIconButton)", btn().width, Style.bar.iconSlot)
     hover()
     expect("tooltip names the device", barStub.tipText, "Spotify: XPS")
@@ -99,7 +97,7 @@ ShellRoot {
     t2.start() } }
   Timer { id: t2; interval: 1800; onTriggered: {
     expect("backend agrees", w.st.device ? w.st.device.name : "", "Arcade")
-    expect("the other two follow the click via the cache file", (w2.shown ? w2.shown.name : "") + "|" + (w3.shown ? w3.shown.name : ""), "Arcade|Arcade")
+    expect("the other entry follows the click via the cache file", w2.shown ? w2.shown.name : "", "Arcade")
     expect("not pending", w.pending, false)
     shot("2-arcade")
     btn().pressed(Qt.LeftButton); btn().pressed(Qt.LeftButton); btn().pressed(Qt.LeftButton)

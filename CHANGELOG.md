@@ -2,6 +2,12 @@
 
 Versions match `manifest.json` and `VERSION`; each commit subject starts with its version.
 
+## 0.1.5
+
+- The icon is now the monitor-speaker glyph (nf-md-monitor_speaker,
+  U+F0F5F); the `icon` setting is removed. An existing `icon` key in
+  config.json or a bar entry is ignored.
+
 ## 0.1.4
 
 - Docs: neutral description of the `icon` setting and of multiple bar

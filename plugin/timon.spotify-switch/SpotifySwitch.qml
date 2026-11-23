@@ -23,13 +23,9 @@ BarWidget {
   readonly property string cli: "omarchy-spotify-switch"
   readonly property string cacheFile: (Quickshell.env("XDG_STATE_HOME") || (Quickshell.env("HOME") + "/.local/state"))
     + "/timon-spotify-switch/status.json"
-  readonly property string configFile: (Quickshell.env("XDG_CONFIG_HOME") || (Quickshell.env("HOME") + "/.config"))
-    + "/timon-spotify-switch/config.json"
   readonly property real refreshMinutes: Number(root.setting("refreshMinutes", 5))
-  // Icon: this bar entry's "icon" setting (shell.json), else "icon" in
-  // config.json, else the Spotify logo. A preset name, "U+XXXX", or a glyph.
-  property string configIcon: ""
-  readonly property string icon: Cycle.glyph(root.setting("icon", "") || root.configIcon)
+  // Fixed icon: nf-md-monitor_speaker (U+F0F5F) from the bar's Nerd Font.
+  readonly property string icon: String.fromCodePoint(0xF0F5F)
   readonly property int hoverThrottleMs: 10000
 
   // Last status from the backend: {state, device, next, devices, tooltip}.
@@ -197,17 +193,6 @@ BarWidget {
     printErrors: false
     onFileChanged: reload()
     onLoaded: root.apply(root.parse(cache.text()), false)
-  }
-
-  FileView {
-    id: configView
-    path: root.configFile
-    watchChanges: true
-    printErrors: false
-    onFileChanged: reload()
-    onLoaded: {
-      try { root.configIcon = String(JSON.parse(configView.text()).icon || "") } catch (e) { root.configIcon = "" }
-    }
   }
 
   // Slow safety net, see the header. Never a tight loop.

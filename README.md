@@ -1,6 +1,6 @@
 # Spotify Switcher for Omarchy
 
-One Spotify icon in the Omarchy bar (`timon.spotify-switch`). **Left click**
+One bar icon in the Omarchy bar (`timon.spotify-switch`). **Left click**
 moves Spotify playback to the next Spotify Connect device; the tooltip names
 the device that plays now. No popup, no panel.
 
@@ -47,21 +47,10 @@ something failed. The tooltip says what:
 
 ## Icon
 
-The icon is a glyph from the Nerd Font the bar already uses, so it follows
-the theme colour and the stock dim/lit states. Pick it with `"icon"`:
-
-| Value | Glyph |
-| --- | --- |
-| `spotify` (default) | nf-fa-spotify, the Spotify logo |
-| `devices` | nf-md-devices (a phone next to a monitor) |
-| `monitor-speaker` | nf-md-monitor_speaker (a monitor with a speaker) |
-| `U+F04C3` or the glyph itself | any other Nerd Font glyph |
-
-Set it for every bar entry in `config.json` (`"icon": "devices"`), or per
-bar entry in `~/.config/omarchy/shell.json`:
-`{"id": "timon.spotify-switch", "icon": "devices"}`. The bar entry wins.
-The widget allows several bar entries, each with its own icon; each one is
-a full, working switcher, and a click on one updates the others.
+The icon is the Nerd Font glyph nf-md-monitor_speaker (U+F0F5F, a monitor
+with a speaker) from the font the bar already uses, so it follows the theme
+colour and the stock dim/lit states. It is fixed; an `"icon"` key left over
+in `config.json` or in a bar entry is ignored.
 
 ## Speed
 
@@ -189,8 +178,8 @@ last update). Backups live in
 
 Spotify is a trademark of Spotify AB. This is an independent, unofficial
 plugin that uses the public Spotify Web API under your own developer app.
-The bar icons are glyphs from [Nerd Fonts](https://www.nerdfonts.com)
-(Font Awesome and Material Design Icons sets), not Spotify artwork.
+The bar icon is a glyph from [Nerd Fonts](https://www.nerdfonts.com)
+(Material Design Icons set), not Spotify artwork.
 
 ## Tests
 
