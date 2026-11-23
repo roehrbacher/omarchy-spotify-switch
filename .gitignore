@@ -1,0 +1,10 @@
+*.qmlc
+.qmlc
+__pycache__/
+# Never in git: tokens, the status cache, local config, env files, screenshots.
+token.json
+status.json
+config.json
+*.env
+.env
+*.png

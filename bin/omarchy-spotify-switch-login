@@ -1,0 +1,4 @@
+#!/bin/bash
+# Log the Spotify Switcher in: opens the Spotify login in your browser and
+# waits (one-shot, 3 min) on http://127.0.0.1:8888/callback for the answer.
+exec "$(dirname "$(readlink -f "$0")")/omarchy-spotify-switch" login "$@"

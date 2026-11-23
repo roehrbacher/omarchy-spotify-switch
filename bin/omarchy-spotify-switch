@@ -1,0 +1,539 @@
+#!/usr/bin/env python3
+"""Spotify Switcher backend for the timon.spotify-switch bar icon.
+
+  omarchy-spotify-switch status            JSON: current device, all devices, cycle order
+  omarchy-spotify-switch next [--from ID]  move playback to the next device in the cycle
+  omarchy-spotify-switch login             browser login (Authorization Code + PKCE)
+  omarchy-spotify-switch logout            forget the saved tokens
+  omarchy-spotify-switch cached            last known status (no network)
+
+Config  $XDG_CONFIG_HOME/timon-spotify-switch/config.json
+          {"client_id": "...", "order": ["Pixel", "gaming PC", "XPS"]}
+        SPOTIFY_SWITCH_CLIENT_ID overrides client_id.
+Tokens  $XDG_STATE_HOME/timon-spotify-switch/token.json (dir 700, file 600)
+Cache   $XDG_STATE_HOME/timon-spotify-switch/status.json (what the bar shows)
+
+Python 3 standard library only. status/next always print one JSON object and
+exit 0 (the state is in the JSON); login/logout exit non-zero on failure.
+"""
+import base64
+import fcntl
+import hashlib
+import http.server as httpserver
+import json
+import os
+import re
+import secrets
+import subprocess
+import sys
+import tempfile
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+
+APP = "timon-spotify-switch"
+HOME = os.path.expanduser("~")
+CONFIG_DIR = os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.join(HOME, ".config"), APP)
+STATE_DIR = os.path.join(os.environ.get("XDG_STATE_HOME") or os.path.join(HOME, ".local", "state"), APP)
+CONFIG = os.path.join(CONFIG_DIR, "config.json")
+TOKEN = os.path.join(STATE_DIR, "token.json")
+CACHE = os.path.join(STATE_DIR, "status.json")
+LOCK = os.path.join(STATE_DIR, "lock")
+SCOPES = "user-read-playback-state user-modify-playback-state"
+# The only redirect URI registered for the app. Tests move the port.
+PORT = int(os.environ.get("SPOTIFY_SWITCH_LOGIN_PORT") or 8888)
+REDIRECT_URI = "http://127.0.0.1:%d/callback" % PORT
+LOGIN_TIMEOUT = float(os.environ.get("SPOTIFY_SWITCH_LOGIN_TIMEOUT") or 180)
+HTTP_TIMEOUT = 8
+RETRY_AFTER_MAX = 3  # wait this long at most for a 429 before giving up
+
+
+def _base(env, default):
+    """API endpoints. Tests point them at a local fake; nothing else is allowed,
+    so an environment variable can never send tokens to another host."""
+    v = os.environ.get(env)
+    if not v:
+        return default
+    if not re.fullmatch(r"http://127\.0\.0\.1:\d{1,5}", v):
+        sys.exit("%s may only point at http://127.0.0.1:<port> (tests)" % env)
+    return v
+
+
+API = _base("SPOTIFY_SWITCH_API", "https://api.spotify.com")
+ACCOUNTS = _base("SPOTIFY_SWITCH_ACCOUNTS", "https://accounts.spotify.com")
+
+
+class Fail(Exception):
+    """A state the bar shows: state (machine word) + tooltip text."""
+
+    def __init__(self, state, message, retry_after=None):
+        super().__init__(message)
+        self.state, self.message, self.retry_after = state, message, retry_after
+
+
+# ---------- files ----------
+
+def private_dir():
+    os.makedirs(STATE_DIR, mode=0o700, exist_ok=True)
+    os.chmod(STATE_DIR, 0o700)
+
+
+def write_private(path, data):
+    """Atomic write, mode 600, in the 700 state dir."""
+    private_dir()
+    fd, tmp = tempfile.mkstemp(dir=STATE_DIR, prefix=".tmp-")
+    try:
+        with os.fdopen(fd, "w") as f:
+            os.fchmod(f.fileno(), 0o600)
+            json.dump(data, f)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def read_json(path):
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def config():
+    c = read_json(CONFIG)
+    return c if isinstance(c, dict) else {}
+
+
+def client_id():
+    cid = os.environ.get("SPOTIFY_SWITCH_CLIENT_ID") or str(config().get("client_id") or "")
+    cid = cid.strip()
+    if not cid:
+        raise Fail("no_client_id", "Spotify: no client ID set (see README)")
+    return cid
+
+
+class Lock:
+    """One process at a time touches the tokens (a refresh rotates them)."""
+
+    def __enter__(self):
+        private_dir()
+        self.f = open(LOCK, "a")
+        os.chmod(LOCK, 0o600)
+        fcntl.flock(self.f, fcntl.LOCK_EX)
+        return self
+
+    def __exit__(self, *a):
+        fcntl.flock(self.f, fcntl.LOCK_UN)
+        self.f.close()
+
+
+# ---------- HTTP ----------
+
+def http(method, url, body=None, form=None, token=None):
+    """Returns (status, headers, parsed JSON or None). Raises Fail('offline')."""
+    headers = {"Accept": "application/json"}
+    data = None
+    if form is not None:
+        data = urllib.parse.urlencode(form).encode()
+        headers["Content-Type"] = "application/x-www-form-urlencoded"
+    elif body is not None:
+        data = json.dumps(body).encode()
+        headers["Content-Type"] = "application/json"
+    elif method in ("PUT", "POST"):
+        data = b""
+    if token:
+        headers["Authorization"] = "Bearer " + token
+    req = urllib.request.Request(url, data=data, method=method, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as r:
+            status, hdrs, raw = r.status, r.headers, r.read()
+    except urllib.error.HTTPError as e:
+        status, hdrs, raw = e.code, e.headers, e.read()
+    except (urllib.error.URLError, OSError) as e:
+        raise Fail("offline", "Spotify: offline")
+    try:
+        parsed = json.loads(raw) if raw else None
+    except ValueError:
+        parsed = None
+    return status, hdrs, parsed
+
+
+def error_reason(data):
+    err = (data or {}).get("error") if isinstance(data, dict) else None
+    if isinstance(err, dict):
+        return str(err.get("reason") or ""), str(err.get("message") or "")
+    return "", str(err or "")
+
+
+# ---------- tokens ----------
+
+def save_token(resp, old_refresh=None):
+    tok = {
+        "access_token": resp["access_token"],
+        # Spotify may rotate the refresh token; keep the old one if it doesn't.
+        "refresh_token": resp.get("refresh_token") or old_refresh,
+        "expires_at": int(time.time()) + int(resp.get("expires_in") or 3600),
+        "scope": resp.get("scope") or SCOPES,
+    }
+    if not tok["refresh_token"]:
+        raise Fail("need_login", "Spotify: not logged in (run omarchy-spotify-switch-login)")
+    write_private(TOKEN, tok)
+    return tok
+
+
+def refresh(tok):
+    status, _, data = http("POST", ACCOUNTS + "/api/token", form={
+        "grant_type": "refresh_token",
+        "refresh_token": tok["refresh_token"],
+        "client_id": client_id(),
+    })
+    if status == 200 and isinstance(data, dict) and data.get("access_token"):
+        return save_token(data, tok["refresh_token"])
+    if status in (400, 401):  # invalid_grant: revoked or expired refresh token
+        raise Fail("need_login", "Spotify: login expired (run omarchy-spotify-switch-login)")
+    if status == 429:
+        raise Fail("rate_limited", "Spotify: busy, try again in a moment")
+    raise Fail("error", "Spotify: token refresh failed (%s)" % status)
+
+
+def access_token(force=False):
+    """Valid access token, refreshed under the lock when due."""
+    client_id()
+    with Lock():
+        tok = read_json(TOKEN)
+        if not isinstance(tok, dict) or not tok.get("refresh_token"):
+            raise Fail("need_login", "Spotify: not logged in (run omarchy-spotify-switch-login)")
+        if force or not tok.get("access_token") or int(tok.get("expires_at") or 0) - 60 < time.time():
+            tok = refresh(tok)
+        return tok["access_token"]
+
+
+def api(method, path, body=None):
+    """Web API call: one refresh on 401, one short wait on 429."""
+    token = access_token()
+    refreshed = waited = False
+    while True:
+        status, hdrs, data = http(method, API + path, body=body, token=token)
+        if status == 401 and not refreshed:
+            refreshed = True
+            token = access_token(force=True)
+            continue
+        if status == 401:
+            raise Fail("need_login", "Spotify: not logged in (run omarchy-spotify-switch-login)")
+        if status == 429:
+            try:
+                ra = max(1, int(hdrs.get("Retry-After") or 1))
+            except ValueError:
+                ra = 1
+            if not waited and ra <= RETRY_AFTER_MAX:
+                waited = True
+                time.sleep(ra)
+                continue
+            raise Fail("rate_limited", "Spotify: busy, try again in %ds" % ra, retry_after=ra)
+        if status == 403:
+            reason, msg = error_reason(data)
+            if reason == "PREMIUM_REQUIRED" or "premium" in msg.lower():
+                raise Fail("premium", "Spotify: Premium needed to switch devices")
+            raise Fail("error", "Spotify refused: " + (msg or "403"))
+        if status >= 500:
+            raise Fail("error", "Spotify: server error (%d)" % status)
+        return status, data
+
+
+# ---------- devices and the cycle ----------
+
+def devices():
+    status, data = api("GET", "/v1/me/player/devices")
+    if status != 200 or not isinstance(data, dict):
+        raise Fail("error", "Spotify: unexpected answer (%d)" % status)
+    out = []
+    for d in data.get("devices") or []:
+        if not d.get("id"):
+            continue  # Spotify sends id null for some devices; they can't be targeted
+        out.append({
+            "id": d["id"],
+            "name": str(d.get("name") or "Unknown device"),
+            "type": str(d.get("type") or ""),
+            "active": bool(d.get("is_active")),
+            "restricted": bool(d.get("is_restricted")),
+        })
+    return out
+
+
+def rank(name, order):
+    """Position in the preferred order: an entry matches a device whose name
+    equals it or starts with it (case-insensitive). Unlisted devices: len(order)."""
+    n = name.casefold()
+    for i, entry in enumerate(order):
+        e = str(entry).casefold()
+        if e and (n == e or n.startswith(e)):
+            return i
+    return len(order)
+
+
+def cycle(devs, order=None):
+    """Fixed order: preferred names first (in config order), then the rest
+    alphabetically by name, then by id so equal names stay stable."""
+    order = order if order is not None else (config().get("order") or [])
+    if not isinstance(order, list):
+        order = []
+    return sorted(devs, key=lambda d: (rank(d["name"], order), d["name"].casefold(), d["id"]))
+
+
+def next_device(ordered, from_id=None):
+    """The device after from_id (or the active one), wrapping; restricted
+    devices are skipped. None active -> the first one. Returns (target, current)."""
+    current = None
+    if from_id:
+        current = next((d for d in ordered if d["id"] == from_id), None)
+    if current is None:
+        current = next((d for d in ordered if d["active"]), None)
+    usable = [d for d in ordered if not d["restricted"]]
+    if not usable:
+        return None, current
+    if current is None:
+        return usable[0], None
+    i = ordered.index(current)
+    for k in range(1, len(ordered) + 1):
+        d = ordered[(i + k) % len(ordered)]
+        if not d["restricted"] and d is not current:
+            return d, current
+    return None, current  # current is the only usable device
+
+
+# ---------- results ----------
+
+def result(state, ordered, message=None, current=None, playing=None):
+    active = current or next((d for d in ordered if d["active"]), None)
+    nxt, _ = next_device(ordered, active["id"] if active else None) if ordered else (None, None)
+    if message is None:
+        if state == "ok" and active:
+            message = "Spotify: " + active["name"]
+        elif state == "ok":
+            message = "Spotify: no active device, click to play on " + nxt["name"] if nxt else "Spotify: no device"
+        else:
+            message = "Spotify: no device (open Spotify on a device)"
+    out = {
+        "state": state,
+        "device": active,
+        "next": nxt,
+        "devices": ordered,
+        "playing": playing,
+        "tooltip": message,
+        "updated": int(time.time()),
+    }
+    return out
+
+
+def failed(e):
+    """Keep the last known devices on the bar with the failure in the tooltip."""
+    last = read_json(CACHE) or {}
+    devs = last.get("devices") if isinstance(last.get("devices"), list) else []
+    out = {
+        "state": e.state,
+        "device": last.get("device") if e.state in ("offline", "rate_limited", "premium", "error") else None,
+        "next": last.get("next") if e.state in ("offline", "rate_limited", "premium", "error") else None,
+        "devices": devs if e.state in ("offline", "rate_limited", "premium", "error") else [],
+        "playing": last.get("playing"),
+        "tooltip": e.message,
+        "updated": int(time.time()),
+    }
+    if e.state == "offline" and out["device"]:
+        out["tooltip"] = "Spotify: %s (offline, last known)" % out["device"]["name"]
+    if e.retry_after:
+        out["retry_after"] = e.retry_after
+    return out
+
+
+STARTED_MS = int(time.time() * 1000)
+
+
+def emit(out):
+    """Print the status and cache it for the bar. A run that started before
+    the cache was last written (a slow status overtaken by a click's next)
+    leaves the newer cache alone."""
+    out["updated_ms"] = int(time.time() * 1000)
+    try:
+        with Lock():
+            last = read_json(CACHE) or {}
+            if int(last.get("updated_ms") or 0) <= STARTED_MS:
+                write_private(CACHE, out)
+    except (OSError, ValueError, TypeError):
+        pass
+    print(json.dumps(out))
+
+
+def cmd_status():
+    try:
+        ordered = cycle(devices())
+        emit(result("ok" if ordered else "no_device", ordered))
+    except Fail as e:
+        emit(failed(e))
+
+
+def cmd_next(from_id=None):
+    try:
+        ordered = cycle(devices())
+        if not ordered:
+            return emit(result("no_device", ordered))
+        target, current = next_device(ordered, from_id)
+        if target is None:
+            who = current["name"] if current else "this device"
+            return emit(result("ok", ordered, current=current,
+                               message="Spotify: %s (only device available)" % who))
+        # Keep the playing state: music moves along if it was playing, a
+        # paused session stays paused on the new device.
+        status, data = api("GET", "/v1/me/player")
+        playing = bool(isinstance(data, dict) and status == 200 and data.get("is_playing"))
+        status, data = api("PUT", "/v1/me/player", body={"device_ids": [target["id"]], "play": playing})
+        if status == 404:
+            # The device left Spotify Connect between the list and the transfer.
+            ordered = cycle(devices())
+            return emit(result("ok" if ordered else "no_device", ordered,
+                               message="Spotify: %s is no longer available" % target["name"]))
+        if status not in (200, 202, 204):
+            raise Fail("error", "Spotify: transfer failed (%d)" % status)
+        for d in ordered:
+            d["active"] = d["id"] == target["id"]
+        emit(result("ok", ordered, current=target, playing=playing))
+    except Fail as e:
+        emit(failed(e))
+
+
+def cmd_cached():
+    out = read_json(CACHE)
+    print(json.dumps(out if isinstance(out, dict) else {"state": "unknown", "tooltip": "Spotify", "devices": []}))
+
+
+# ---------- login ----------
+
+def b64url(raw):
+    return base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
+
+
+def cmd_login():
+    try:
+        cid = client_id()
+    except Fail as e:
+        print("No Spotify client ID. Put it in %s as {\"client_id\": \"...\"}." % CONFIG, file=sys.stderr)
+        return 1
+    verifier = b64url(secrets.token_bytes(64))  # 86 chars, within PKCE's 43..128
+    challenge = b64url(hashlib.sha256(verifier.encode()).digest())
+    state = b64url(secrets.token_bytes(16))
+    got = {}
+
+    class Handler(httpserver.BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_GET(self):
+            u = urllib.parse.urlparse(self.path)
+            if u.path != "/callback":
+                self.send_response(404)
+                self.end_headers()
+                return
+            q = urllib.parse.parse_qs(u.query)
+            ok = q.get("state", [""])[0] == state
+            if ok:
+                got["code"] = q.get("code", [""])[0]
+                got["error"] = q.get("error", [""])[0]
+            else:
+                got.setdefault("bad_state", 0)
+                got["bad_state"] += 1
+            good = ok and got.get("code")
+            self.send_response(200 if good else 400)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.end_headers()
+            msg = "Spotify Switcher is logged in. You can close this tab." if good else "Spotify login failed. You can close this tab."
+            self.wfile.write(("<!doctype html><title>Spotify Switcher</title><p>%s</p>" % msg).encode())
+
+    try:
+        server = httpserver.HTTPServer(("127.0.0.1", PORT), Handler)
+    except OSError as e:
+        print("Port %d on 127.0.0.1 is busy (%s). Close what uses it and try again." % (PORT, e.strerror), file=sys.stderr)
+        return 1
+    server.timeout = 1
+    url = ACCOUNTS + "/authorize?" + urllib.parse.urlencode({
+        "client_id": cid,
+        "response_type": "code",
+        "redirect_uri": REDIRECT_URI,
+        "code_challenge_method": "S256",
+        "code_challenge": challenge,
+        "scope": SCOPES,
+        "state": state,
+    })
+    print("Opening the Spotify login in your browser. If nothing opens, visit:\n" + url, file=sys.stderr)
+    try:
+        subprocess.Popen(["xdg-open", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except OSError:
+        pass
+    deadline = time.time() + LOGIN_TIMEOUT
+    try:
+        while "code" not in got and time.time() < deadline:
+            server.handle_request()
+    finally:
+        server.server_close()  # one-shot: the listener is gone after this
+    if "code" not in got:
+        print("Login timed out after %ds." % LOGIN_TIMEOUT, file=sys.stderr)
+        return 1
+    if got.get("error") or not got.get("code"):
+        print("Spotify said: %s" % (got.get("error") or "no code"), file=sys.stderr)
+        return 1
+    try:
+        status, _, data = http("POST", ACCOUNTS + "/api/token", form={
+            "grant_type": "authorization_code",
+            "code": got["code"],
+            "redirect_uri": REDIRECT_URI,
+            "client_id": cid,
+            "code_verifier": verifier,
+        })
+        if status != 200 or not isinstance(data, dict) or not data.get("access_token"):
+            print("Token exchange failed (%s): %s" % (status, error_reason(data)[1] or data), file=sys.stderr)
+            return 1
+        with Lock():
+            save_token(data)
+    except Fail as e:
+        print(e.message, file=sys.stderr)
+        return 1
+    print("Logged in. Tokens saved to %s" % TOKEN, file=sys.stderr)
+    cmd_status()
+    return 0
+
+
+def cmd_logout():
+    try:
+        os.unlink(TOKEN)
+    except FileNotFoundError:
+        pass
+    emit(failed(Fail("need_login", "Spotify: not logged in (run omarchy-spotify-switch-login)")))
+    return 0
+
+
+def main(argv):
+    cmd = argv[1] if len(argv) > 1 else "status"
+    if cmd == "status":
+        cmd_status()
+    elif cmd == "next":
+        from_id = argv[3] if len(argv) > 3 and argv[2] == "--from" else None
+        cmd_next(from_id)
+    elif cmd == "cached":
+        cmd_cached()
+    elif cmd == "login":
+        return cmd_login()
+    elif cmd == "logout":
+        return cmd_logout()
+    else:
+        print(__doc__.strip(), file=sys.stderr)
+        return 0 if cmd in ("-h", "--help", "help") else 2
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

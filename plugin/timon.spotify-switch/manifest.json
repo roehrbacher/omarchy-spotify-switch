@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "id": "timon.spotify-switch",
+  "name": "Spotify Switcher",
+  "version": "0.1.0",
+  "author": "Timon Röhrbacher",
+  "description": "One Spotify icon: click to move playback to the next Spotify Connect device",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "SpotifySwitch.qml"
+  },
+  "barWidget": {
+    "displayName": "Spotify Switcher",
+    "description": "Click to move Spotify to the next device (tooltip: current device)",
+    "category": "Media",
+    "allowMultiple": false
+  }
+}

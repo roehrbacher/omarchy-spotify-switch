@@ -1,0 +1,27 @@
+#!/bin/bash
+# Blocks commits that would publish secrets or personal device data.
+# Fails closed: no gitleaks, no commit. Enable with: git config core.hooksPath .githooks
+set -uo pipefail
+fail=0
+if ! command -v gitleaks >/dev/null; then
+  echo "pre-commit: gitleaks is not installed; refusing to commit (install gitleaks)." >&2
+  exit 1
+fi
+gitleaks git --pre-commit --staged --redact --no-banner -v || fail=1
+# Token, cache and config files never belong in git.
+bad=$(git diff --cached --name-only --diff-filter=ACMR | grep -E '(^|/)(token|status|config)\.json$|\.env$' || true)
+if [[ -n $bad ]]; then echo "pre-commit: blocked, these files must stay local:" >&2; echo "$bad" >&2; fail=1; fi
+# Tailscale IPs/names, MACs, serials, GitHub/xAI tokens, private keys, bearer tokens.
+pat='\b100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.[0-9]+\.[0-9]+|\.ts\.net\b|\b([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}\b|DWH[0-9A-Z]{8,}|gh[pousr]_[A-Za-z0-9]{20,}|xai-[A-Za-z0-9]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY|Bearer [A-Za-z0-9_-]{40,}|BQ[A-Za-z0-9_-]{60,}|AQ[A-Za-z0-9_-]{60,}'
+hits=$(git diff --cached -U0 --diff-filter=ACMR | grep -E '^\+[^+]' | grep -nE "$pat" || true)
+if [[ -n $hits ]]; then
+  echo "pre-commit: blocked, staged lines look like a Tailscale IP/MAC/serial/token/key:" >&2
+  echo "$hits" | sed -E 's/(.{0,40}).*/\1…/' >&2; fail=1
+fi
+# The Spotify client ID from this machine's config (not secret, kept out anyway).
+cfg=${XDG_CONFIG_HOME:-$HOME/.config}/timon-spotify-switch/config.json
+cid=$( [[ -r $cfg ]] && command -v jq >/dev/null && jq -r '.client_id // empty' "$cfg" 2>/dev/null)
+if [[ -n $cid ]] && git diff --cached -U0 | grep -E '^\+' | grep -qF "$cid"; then
+  echo "pre-commit: blocked, the staged change contains your Spotify client ID." >&2; fail=1
+fi
+exit $fail
