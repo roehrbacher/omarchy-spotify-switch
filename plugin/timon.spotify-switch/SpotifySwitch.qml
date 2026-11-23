@@ -126,6 +126,15 @@ BarWidget {
     }
   }
 
+  // Guard: if an answer never comes (helper hung or lost the line), leave
+  // the "click in flight" state after 15 s and read Spotify again.
+  Timer {
+    id: inFlightGuard
+    interval: 15000
+    running: root.inFlight > 0
+    onTriggered: { root.inFlight = 0; root.clickNote = ""; root.refresh() }
+  }
+
   onTipChanged: if (button.tooltipHovered && root.bar) root.bar.showTooltip(button, root.tip)
 
   // The long-lived helper; restarted a moment after it ends.

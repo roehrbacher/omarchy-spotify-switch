@@ -337,6 +337,15 @@ def player(margin=TOKEN_MARGIN):
     return False, None
 
 
+def valid_devices(devs):
+    """A cached device list is used only if every entry has the fields the
+    cycle needs (the cache is a plain file anyone in the session can edit)."""
+    return isinstance(devs, list) and all(
+        isinstance(d, dict) and isinstance(d.get("id"), str) and d["id"] and isinstance(d.get("name"), str)
+        and isinstance(d.get("active", False), bool) and isinstance(d.get("restricted", False), bool)
+        for d in devs)
+
+
 def rank(name, order):
     """Position in the preferred order: an entry matches a device whose name
     equals it or starts with it (case-insensitive). Unlisted devices: len(order)."""
@@ -478,14 +487,14 @@ def click(from_id=None, t_click=None):
     try:
         last = read_json(CACHE) or {}
         age = started - int(last.get("read_ms") or 0)
-        ordered = last.get("devices") if last.get("state") == "ok" and isinstance(last.get("devices"), list) else None
+        ordered = last.get("devices") if last.get("state") == "ok" and valid_devices(last.get("devices")) else None
         t = time.perf_counter()
         if not ordered or age > DEVICES_FRESH_MS:
             ordered = cycle(devices())
             st["get_devices"] = round((time.perf_counter() - t) * 1000)
             playing = None
         else:
-            ordered = cycle([dict(d) for d in ordered])
+            ordered = cycle([dict(d, active=bool(d.get("active")), restricted=bool(d.get("restricted"))) for d in ordered])
             playing = last.get("playing") if age <= PLAYING_FRESH_MS else None
         if not ordered:
             out = result("no_device", ordered)
@@ -613,11 +622,20 @@ def cmd_serve():
             sys.stdout.flush()
         return now_ms()
 
+    def unexpected(e):
+        # Never let a bug kill a worker: the widget waits for an answer.
+        return {"state": "error", "tooltip": "Spotify: internal error (%s)" % type(e).__name__,
+                "device": None, "next": None, "devices": [], "playing": None, "updated": int(time.time())}
+
     def status_loop():
         while True:
             status_wanted.wait()
             status_wanted.clear()
-            send("status", read_status(margin=TOKEN_WARM))
+            try:
+                out = read_status(margin=TOKEN_WARM)
+            except Exception as e:  # noqa: BLE001
+                out = unexpected(e)
+            send("status", out)
 
     def click_loop():
         while True:
@@ -625,7 +643,10 @@ def cmd_serve():
                 while not clicks:
                     clicks_cv.wait()
                 from_id, t_click = clicks.pop(0)
-            out, st = click(from_id, t_click)
+            try:
+                out, st = click(from_id, t_click)
+            except Exception as e:  # noqa: BLE001
+                out, st = unexpected(e), {}
             t_sent = send("next", out, {"click_ms": t_click})
             if out.get("transfer"):
                 if t_click:
@@ -694,6 +715,8 @@ def cmd_login():
     got = {}
 
     class Handler(http.server.BaseHTTPRequestHandler):
+        timeout = 5  # an idle connection cannot hold the one-shot listener
+
         def log_message(self, *a):
             pass
 

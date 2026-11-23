@@ -95,9 +95,10 @@ list read, no play-state read and no token refresh on the way:
 
 What stays slow is Spotify's own handoff: the PUT only returns once Spotify
 has told the target device, and the device then has to buffer and start the
-audio. On the XPS that was about 0.35 s for the PUT and 0.8 s until the
-position moved; the Pixel took 2.2 s just for the PUT (the phone app has to
-wake). The bar cannot speed that up.
+audio. On a test laptop that was about 0.35 s for the PUT and 0.8 s until
+the position moved; a phone took 2.2 s just for the PUT (the app has to
+wake), and across a handful of real clicks the median from click to sound was
+about 3 s, nearly all of it Spotify's handoff. The bar cannot speed that up.
 
 ### Timing log (opt-in)
 
@@ -111,24 +112,43 @@ its playback position moving, measured from the PUT's answer (this polls
 `GET /me/player` up to 10 s after each click, only while timing is on). No
 device ids or tokens are logged.
 
+## Requirements
+
+- [Omarchy](https://omarchy.org) 4.x (its Quickshell bar and plugin system).
+- **Spotify Premium.** Spotify only lets Premium accounts move playback
+  through the Web API; without it every click shows "Premium needed to
+  switch devices".
+- Your own Spotify developer app (free). This plugin ships no client ID.
+- `python3` (standard library only) and `xdg-open`, both part of Omarchy.
+
+## Spotify app setup
+
+1. Open <https://developer.spotify.com/dashboard> and create an app.
+2. Redirect URI: exactly `http://127.0.0.1:8888/callback` (Spotify requires
+   the loopback IP, not `localhost`).
+3. APIs: tick **Web API**.
+4. While the app is in Development mode, add your Spotify account's e-mail
+   under **User Management**, or Spotify refuses the login.
+5. Copy the **Client ID**. No client secret is needed or used: the login is
+   Authorization Code with PKCE (S256), the flow meant for apps that cannot
+   keep a secret.
+
 ## Install
 
-Needs only what Omarchy already ships: `python3` (standard library only),
-`xdg-open`. Nothing is installed system-wide.
-
-1. Create a Spotify app at <https://developer.spotify.com/dashboard> with the
-   redirect URI `http://127.0.0.1:8888/callback` and the Web API enabled. No
-   client secret is used (Authorization Code with PKCE).
-2. `git clone https://github.com/roehrbacher/omarchy-spotify-switch ~/Work/omarchy-spotify-switch`
-3. `cd ~/Work/omarchy-spotify-switch && ./install.sh` (`--dry-run` lists the changes first)
-4. Put the app's client ID in `~/.config/timon-spotify-switch/config.json`:
-   `{"client_id": "<id>", "order": ["Pixel", "gaming PC", "XPS"]}`
-   (`order` is optional; use your devices' names as Spotify shows them.)
-5. `omarchy-spotify-switch-login`: opens the Spotify login in your browser and
+1. `git clone https://github.com/roehrbacher/omarchy-spotify-switch ~/Work/omarchy-spotify-switch`
+2. `cd ~/Work/omarchy-spotify-switch && ./install.sh` (`--dry-run` lists the
+   changes first; nothing is installed system-wide and nothing runs as root)
+3. Put your client ID in `~/.config/timon-spotify-switch/config.json`
+   (created by the installer, mode 600):
+   `{"client_id": "<your client id>", "order": ["Pixel", "Living room", "Laptop"]}`
+   `order` is optional: names (or name prefixes) of your devices as Spotify
+   shows them, in the order you want to cycle.
+4. `omarchy-spotify-switch-login`: opens the Spotify login in your browser and
    waits up to 3 minutes for the answer on `127.0.0.1:8888` (one request,
-   then the listener is gone).
-6. Add `timon.spotify-switch` to your bar in Omarchy's settings, then click
-   the reload icon when it suits you.
+   then the listener is gone). `SPOTIFY_SWITCH_LOGIN_TIMEOUT=600` gives you
+   longer.
+5. Add `timon.spotify-switch` to your bar in Omarchy's settings and reload
+   the shell.
 
 Update: `git pull && ./install.sh`. Undo: `./uninstall.sh` (plugin and
 helpers; keeps your login), `./uninstall.sh --purge` (also deletes tokens,
@@ -165,6 +185,13 @@ last update). Backups live in
 - The API hosts are fixed. Tests may point them at `http://127.0.0.1:<port>`
   only, so no environment variable can send tokens anywhere else.
 
+## Not affiliated with Spotify
+
+Spotify is a trademark of Spotify AB. This is an independent, unofficial
+plugin that uses the public Spotify Web API under your own developer app.
+The bar icons are glyphs from [Nerd Fonts](https://www.nerdfonts.com)
+(Font Awesome and Material Design Icons sets), not Spotify artwork.
+
 ## Tests
 
 ```
@@ -188,3 +215,7 @@ on a build box, not on a desktop with a live shell.
 plus a pattern check for IPs, MACs, serials, tokens and your client ID. It
 fails closed (no gitleaks, no commit). The version is `manifest.json`
 `version` (also `VERSION`); each commit subject starts with it.
+
+## License
+
+MIT, see [LICENSE](LICENSE).

@@ -183,6 +183,16 @@ ok "  timing log: handoff line (Spotify reports the target playing)" 'for _ in $
 exec 7>&-
 ok "  exits when stdin closes" 'for _ in $(seq 50); do kill -0 $SV 2>/dev/null || break; sleep 0.1; done; ! kill -0 $SV 2>/dev/null'
 ok "  nothing on stderr" '[[ ! -s $TMP/serve.err ]]'
+# A malformed cache (hand edit, old version) must not kill the helper's click worker.
+five; token "$(fstate .access)" "$(fstate .refresh)" 3600; "$B" status >/dev/null
+mkfifo "$TMP/in2"; "$B" serve <"$TMP/in2" >"$TMP/serve2.out" 2>"$TMP/serve2.err" & SV2=$!
+exec 8>"$TMP/in2"
+for _ in $(seq 100); do grep -q '"kind": "status"' "$TMP/serve2.out" && break; sleep 0.05; done
+echo "{\"state\":\"ok\",\"updated_ms\":99999999999999,\"read_ms\":$(( $(date +%s%N) / 1000000 + 100000 )),\"playing\":true,\"devices\":[{\"id\":\"xps\",\"active\":true},{\"id\":\"ar\",\"name\":\"Arcade\"}]}" >"$SD/status.json"
+echo "next - 1" >&8; echo "next - 2" >&8
+ok "malformed cached device list: both clicks still answered (fresh list read)" 'for _ in $(seq 100); do [[ $(grep -c "\"kind\": \"next\"" "$TMP/serve2.out") -ge 2 ]] && break; sleep 0.05; done; [[ $(grep -c "\"kind\": \"next\"" "$TMP/serve2.out") -ge 2 && $(grep "\"kind\": \"next\"" "$TMP/serve2.out" | head -1 | jq -r .state) == ok ]]'
+ok "  no traceback" '! grep -q Traceback "$TMP/serve2.err"'
+exec 8>&-; wait $SV2 2>/dev/null
 ok "timing off by default: no timing.log" 'rm -f "$SD/timing.log"; "$B" status >/dev/null; "$B" next >/dev/null; [[ ! -e $SD/timing.log ]]'
 
 five; "$B" status >/dev/null
@@ -217,6 +227,19 @@ ok "login: wrong state ignored, times out, exit 1, no token" '! PATH="$TMP/stub:
 python3 -c 'import socket,time,sys; s=socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); s.bind(("127.0.0.1",int(sys.argv[1]))); s.listen(); time.sleep(3)' "$LP" & BUSY=$!; sleep 0.3
 ok "login: port busy -> exit 1, says busy" '! SPOTIFY_SWITCH_LOGIN_TIMEOUT=3 SPOTIFY_SWITCH_LOGIN_PORT=$LP "$B" login >/dev/null 2>"$TMP/busy.err" && grep -q busy "$TMP/busy.err"'
 kill $BUSY 2>/dev/null; wait $BUSY 2>/dev/null
+rm -f "$SD/token.json"
+cat >"$TMP/stub/xdg-open" <<STUB
+#!/bin/bash
+sleep 0.5; curl -s -m 7 -L "\$1" >"$TMP/browser2.html"
+STUB
+python3 -c 'import socket,time,sys
+for _ in range(50):
+    try: s=socket.create_connection(("127.0.0.1",int(sys.argv[1]))); break
+    except OSError: time.sleep(0.05)
+time.sleep(9)' "$LP" & IDLE=$!
+sleep 0.2
+ok "login: an idle local connection cannot block the callback" 'PATH="$TMP/stub:$PATH" SPOTIFY_SWITCH_LOGIN_PORT=$LP SPOTIFY_SWITCH_LOGIN_TIMEOUT=8 "$B" login >/dev/null 2>&1 && [[ -s $SD/token.json ]]'
+kill $IDLE 2>/dev/null; wait $IDLE 2>/dev/null
 echo '{}' >"$CFG"
 ok "login without client ID: exit 1, says where to put it" '! "$B" login >/dev/null 2>"$TMP/nocid.err" && grep -q config.json "$TMP/nocid.err"'
 echo '{"client_id":"test-client"}' >"$CFG"; token a r 3600

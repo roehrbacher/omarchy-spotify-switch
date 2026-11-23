@@ -2,6 +2,23 @@
 
 Versions match `manifest.json` and `VERSION`; each commit subject starts with its version.
 
+## 0.1.3
+
+Pre-release review fixes, LICENSE and a public README.
+
+- Fix: a malformed cached device list (hand edit, or an entry without a
+  name) crashed the helper's click worker, so clicks were never answered
+  and the icon stayed in "switching" for good. Cached lists are now
+  validated (a bad one means a fresh read), and neither helper worker can
+  die on an unexpected error any more (it answers with an error tooltip).
+- Fix: the widget leaves the "click in flight" state after 15 s if no answer
+  comes, and reads Spotify again, instead of ignoring every update.
+- Fix: an idle connection to the one-shot login listener (any local
+  program) blocked the real callback until the login timed out; requests
+  now time out after 5 s.
+- MIT LICENSE; README: requirements (Premium), Spotify app setup with your
+  own client ID, PKCE, the redirect URI, trademark note.
+
 ## 0.1.2
 
 - The icon is configurable: `"icon"` per bar entry (shell.json) or in
@@ -14,7 +31,7 @@ Versions match `manifest.json` and `VERSION`; each commit subject starts with it
 ## 0.1.1
 
 Clicks are fast: one PUT to Spotify instead of a Python start plus three
-requests on fresh connections (measured on the XPS: about 0.6–1.2 s of our
+requests on fresh connections (measured on a laptop: about 0.6–1.2 s of our
 own time before Spotify even started its handoff, now about 0.1 s plus
 Spotify's PUT).
 
