@@ -70,17 +70,17 @@ echo '{"client_id":"test-client","order":["Pixel","gaming PC","XPS"]}' >"$CFG"
 fake "{\"devices\":[$(dev xps XPS),$(dev px 'Pixel 10 Pro')],\"playing\":false}"
 ok "no active device: status says so" '"$B" status | jq -e ".device == null and (.tooltip | test(\"no active device\"))" >/dev/null'
 ok "no active device: next -> first in cycle" '[[ $("$B" next | jq -r .device.name) == "Pixel 10 Pro" ]]'
-ok "nothing was playing: play:false" '[[ $(put_body | jq -c .play) == false ]]'
-fake "{\"devices\":[$(dev xps XPS true)],\"playing\":true}"
+ok "nothing was playing: no play flag (Spotify keeps it paused)" '[[ $(put_body | jq -c "has(\"play\")") == false ]]'
+fake "{\"devices\":[$(dev xps XPS true)],\"playing\":true}"; "$B" status >/dev/null
 before=$(logcount "PUT /v1/me/player")
 ok "single active device: tooltip says so" '[[ $("$B" next | jq -r .tooltip) == "Spotify: XPS (only device available)" ]]'
 ok "single active device: no transfer" '[[ $(logcount "PUT /v1/me/player") == "$before" ]]'
-fake "{\"devices\":[$(dev xps XPS)]}"
+fake "{\"devices\":[$(dev xps XPS)]}"; "$B" status >/dev/null
 ok "single inactive device: next plays there" '[[ $("$B" next | jq -r .device.name) == XPS ]]'
-fake '{"devices":[]}'
+fake '{"devices":[]}'; "$B" status >/dev/null
 before=$(logcount "PUT /v1/me/player")
 ok "no devices: no_device, no transfer" '[[ $("$B" next | jq -r .state) == no_device && $(logcount "PUT /v1/me/player") == "$before" ]]'
-fake "{\"devices\":[$(dev xps XPS true),$(dev tv TV false true),$(dev px Pixel)]}"
+fake "{\"devices\":[$(dev xps XPS true),$(dev tv TV false true),$(dev px Pixel)]}"; "$B" status >/dev/null
 ok "restricted device skipped (XPS -> Pixel, not TV)" '[[ $("$B" next | jq -r .device.name) == Pixel ]]'
 fake "{\"devices\":[$(dev xps XPS true),{\"id\":null,\"name\":\"Ghost\",\"is_active\":false},$(dev px Pixel)]}"
 ok "device without id ignored" '[[ $("$B" status | names) == "Pixel,XPS" ]]'
@@ -120,14 +120,70 @@ ok "429 Retry-After 30: rate_limited at once, tooltip says 30s" '[[ $(jq -r .sta
 ok "  last known device kept" '[[ $(jq -r .device.name <<<"$R") == XPS ]]'
 fake '{"force":{"PUT /v1/me/player":[{"status":403,"body":{"error":{"status":403,"message":"Player command failed: Premium required","reason":"PREMIUM_REQUIRED"}}}]}}'
 ok "403 PREMIUM_REQUIRED -> premium, clear tooltip" '[[ $("$B" next | jq -r ".state + \"|\" + .tooltip") == "premium|Spotify: Premium needed to switch devices" ]]'
-fake '{"force":{"PUT /v1/me/player":[{"status":404,"body":{"error":{"status":404,"message":"Device not found"}}}]}}'
-ok "404 on transfer (device gone) -> says so" '[[ $("$B" next | jq -r .tooltip) == "Spotify: Arcade is no longer available" ]]'
+five; "$B" status >/dev/null
+fake "{\"devices\":[$(dev xps XPS true),$(dev pc 'gaming PC'),$(dev px 'Pixel 10 Pro'),$(dev ks 'Kitchen speaker')]}"
+g0=$(logcount "GET /v1/me/player/devices")
+ok "404 (Arcade left, cache still lists it): re-read once, moves to the next one there" '[[ $("$B" next | jq -r .device.name) == "Kitchen speaker" && $(( $(logcount "GET /v1/me/player/devices") - g0 )) == 1 ]]'
+"$B" status >/dev/null
+fake '{"force":{"PUT /v1/me/player":[{"status":404,"body":{"error":{"status":404}}},{"status":404,"body":{"error":{"status":404}}}]}}'
+ok "404 twice -> says the device is no longer available" '[[ $("$B" next | jq -r .tooltip) == *"is no longer available" ]]'
 fake '{"force":{"GET /v1/me/player/devices":[{"status":502}]}}'
 ok "5xx -> error" '[[ $("$B" status | jq -r .state) == error ]]'
-"$B" status >/dev/null
+five; "$B" status >/dev/null
 DEAD=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1])')
 R=$(SPOTIFY_SWITCH_API=http://127.0.0.1:$DEAD "$B" status)
 ok "network down -> offline, last device in tooltip" '[[ $(jq -r .state <<<"$R") == offline && $(jq -r .tooltip <<<"$R") == "Spotify: XPS (offline, last known)" ]]'
+
+# --- the click path (0.1.1): one PUT, cached list and play state ---
+token "$(fstate .access)" "$(fstate .refresh)" 3600; five; "$B" status >/dev/null
+n0=$(flog | jq length)
+"$B" next >/dev/null
+ok "fresh cache: a click is exactly one request, the PUT" '[[ $(flog | jq -c "[.[$n0:][] | .req]") == "[\"PUT /v1/me/player\"]" ]]'
+ok "  cached playing -> play:true" '[[ $(put_body | jq -c .play) == true ]]'
+"$B" status >/dev/null
+jq '.read_ms -= 20000' "$SD/status.json" >"$TMP/c" && mv "$TMP/c" "$SD/status.json"
+n0=$(flog | jq length); "$B" next >/dev/null
+ok "play state older than 15 s: GET /me/player, then PUT (no device list)" '[[ $(flog | jq -c "[.[$n0:][] | .req]") == "[\"GET /v1/me/player\",\"PUT /v1/me/player\"]" ]]'
+"$B" status >/dev/null
+jq '.read_ms -= 700000' "$SD/status.json" >"$TMP/c" && mv "$TMP/c" "$SD/status.json"
+n0=$(flog | jq length); "$B" next >/dev/null
+ok "device list older than 10 min: read again first" '[[ $(flog | jq -c "[.[$n0:][] | .req] | .[0]") == "\"GET /v1/me/player/devices\"" ]]'
+rm -f "$SD/status.json"; n0=$(flog | jq length)
+ok "no cache at all: reads the list, then moves" '[[ $("$B" next | jq -r .state) == ok && $(flog | jq -c "[.[$n0:][] | .req] | .[0]") == "\"GET /v1/me/player/devices\"" ]]'
+five; "$B" status >/dev/null; "$B" next >/dev/null   # XPS -> Arcade
+fake "{\"devices\":[$(dev xps XPS true),$(dev pc 'gaming PC'),$(dev px 'Pixel 10 Pro'),$(dev ks 'Kitchen speaker'),$(dev ar Arcade)]}"
+ok "Spotify still names the old device right after a transfer: the target stays" '[[ $("$B" status | jq -r .device.name) == Arcade ]]'
+fake "{\"devices\":[$(dev xps XPS),$(dev pc 'gaming PC' true),$(dev px 'Pixel 10 Pro'),$(dev ks 'Kitchen speaker'),$(dev ar Arcade)]}"
+ok "  but a different device (picked elsewhere) wins at once" '[[ $("$B" status | jq -r .device.name) == "gaming PC" ]]'
+"$B" next >/dev/null   # gaming PC -> XPS
+fake "{\"devices\":[$(dev xps XPS),$(dev pc 'gaming PC' true),$(dev px 'Pixel 10 Pro'),$(dev ks 'Kitchen speaker'),$(dev ar Arcade)]}"
+jq '.transfer.at_ms -= 7000' "$SD/status.json" >"$TMP/c" && mv "$TMP/c" "$SD/status.json"
+ok "  and after 6 s Spotify's word counts again" '[[ $("$B" status | jq -r .device.name) == "gaming PC" ]]'
+
+# --- serve: the bar's long-lived helper ---
+five; token "$(fstate .access)" "$(fstate .refresh)" 300   # expires in 5 min
+r0=$(logcount "POST /api/token")
+mkfifo "$TMP/in"; SPOTIFY_SWITCH_TIMING=1 "$B" serve <"$TMP/in" >"$TMP/serve.out" 2>"$TMP/serve.err" & SV=$!
+exec 7>"$TMP/in"
+waitline() { for _ in $(seq 100); do [[ $(grep -c "\"kind\": \"$1\"" "$TMP/serve.out") -ge $2 ]] && return 0; sleep 0.05; done; return 1; }
+ok "serve: answers a status line at start" 'waitline status 1'
+ok "  background read refreshed a token expiring within 10 min" '[[ $(( $(logcount "POST /api/token") - r0 )) == 1 ]]'
+r0=$(logcount "POST /api/token"); n0=$(flog | jq length)
+echo "next - $(( $(date +%s%N) / 1000000 ))" >&7
+ok "  next: answers a next line" 'waitline next 1'
+L=$(grep "\"kind\": \"next\"" "$TMP/serve.out" | tail -1)
+ok "  next: XPS -> Arcade, one PUT, no token refresh on the click" '[[ $(jq -r .device.name <<<"$L") == Arcade && $(flog | jq -c "[.[$n0:][] | .req] | .[0]") == "\"PUT /v1/me/player\"" && $(( $(logcount "POST /api/token") - r0 )) == 0 ]]'
+echo "seen $(jq -r .click_ms <<<"$L") $(( $(date +%s%N) / 1000000 ))" >&7
+ok "  confirms with Spotify 1.5 s later (status line), still Arcade" 'sleep 1.7; waitline status 2 && [[ $(grep "\"kind\": \"status\"" "$TMP/serve.out" | tail -1 | jq -r .device.name) == Arcade ]]'
+ok "  keep-alive: the click reused the connection the start-up read opened" '[[ $(flog | jq -r "[.[] | select(.req == \"PUT /v1/me/player\")] | last | .port") == $(flog | jq -r "[.[:$n0][] | select(.req == \"GET /v1/me/player\")] | last | .port") ]]'
+echo "next $(jq -r .device.id <<<"$L") 0" >&7; echo "next ks 0" >&7
+ok "  two queued clicks run in order (Arcade -> Kitchen speaker -> Pixel)" 'waitline next 3 && [[ $(grep "\"kind\": \"next\"" "$TMP/serve.out" | tail -1 | jq -r .device.name) == "Pixel 10 Pro" ]]'
+ok "  timing log: click line with stages, no ids or tokens, 600" 'for _ in $(seq 40); do grep -q "\"event\": \"click\"" "$SD/timing.log" 2>/dev/null && break; sleep 0.1; done; grep "\"event\": \"click\"" "$SD/timing.log" | jq -e "has(\"put\") and has(\"click_to_widget\") and has(\"cache_write\")" >/dev/null && ! grep -qE "\"(ar|xps|ks|px)\"|acc-|ref-" "$SD/timing.log" && [[ $(perm "$SD/timing.log") == 600 ]]'
+ok "  timing log: handoff line (Spotify reports the target playing)" 'for _ in $(seq 60); do grep -q "\"event\": \"handoff\"" "$SD/timing.log" && break; sleep 0.1; done; grep "\"event\": \"handoff\"" "$SD/timing.log" | head -1 | jq -e ".since_put_done_active != null" >/dev/null'
+exec 7>&-
+ok "  exits when stdin closes" 'for _ in $(seq 50); do kill -0 $SV 2>/dev/null || break; sleep 0.1; done; ! kill -0 $SV 2>/dev/null'
+ok "  nothing on stderr" '[[ ! -s $TMP/serve.err ]]'
+ok "timing off by default: no timing.log" 'rm -f "$SD/timing.log"; "$B" status >/dev/null; "$B" next >/dev/null; [[ ! -e $SD/timing.log ]]'
 
 five; "$B" status >/dev/null
 jq '.updated_ms = 99999999999999 | .tooltip = "newer"' "$SD/status.json" >"$TMP/c" && mv "$TMP/c" "$SD/status.json"

@@ -71,6 +71,7 @@ ShellRoot {
     expect("cached device shown before Spotify answers", w.shown ? w.shown.name : "", "XPS")
     expect("Spotify read still running (shown without waiting)", w.reading, true)
     expect("icon lit", btn().dimmed, false)
+    expect("helper (serve) running", w.helperUp, true)
     expect("glyph nf-fa-spotify", btn().text, "\uf1bc")
     expect("icon slot width (stock BarIconButton)", btn().width, Style.bar.iconSlot)
     hover()

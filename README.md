@@ -6,10 +6,11 @@ the device that plays now. No popup, no panel.
 
 ## What a click does
 
-1. Reads the devices Spotify Connect lists right now
-   (`GET /v1/me/player/devices`). Spotify only lists devices where Spotify is
-   open or was active lately, so the cycle runs over whatever is there; a
-   missing device is skipped.
+1. Takes the devices Spotify Connect lists (`GET /v1/me/player/devices`,
+   kept fresh in the background, see Speed). Spotify only lists devices
+   where Spotify is open or was active lately, so the cycle runs over
+   whatever is there; a missing device is skipped, and a device that left
+   since the last read is noticed by the PUT's 404.
 2. Puts them in a **fixed order**: first the names from `order` in the
    config, in that order (an entry matches a device whose name equals it or
    starts with it, ignoring case, so `"Pixel"` matches "Pixel 10 Pro"), then
@@ -19,8 +20,9 @@ the device that plays now. No popup, no panel.
    With no active device it picks the first one.
 4. Moves playback there (`PUT /v1/me/player`). **The play state is kept**:
    if music was playing it keeps playing on the new device (`play: true`);
-   if it was paused, or nothing was active, it moves paused (`play: false`),
-   so a click never starts music by surprise.
+   if it was paused, or nothing was active, the `play` flag is left out,
+   which Spotify documents as "keep the current state", so a click never
+   starts music by surprise.
 
 With only one device available, a click just says "Spotify: XPS (only device
 available)" in the tooltip. (One device that is *not* active yet is the
@@ -45,21 +47,51 @@ something failed. The tooltip says what:
 
 ## Speed
 
-- The bar shows the last known state at once: the backend writes every
-  answer to a cache file (`status.json`), which the widget reads on start
-  and watches for changes (an event, not a poll).
-- A click shows the target device in the icon's state and tooltip at once
-  (optimistic); the backend's answer follows a moment later and corrects it
-  if Spotify disagrees. Rapid clicks step through the cycle and end where the
-  last one pointed.
-- Spotify is read at start, after every click, when the pointer rests on the
-  icon (at most every 20 s), and every 5 minutes. Spotify has no push channel
-  for "playback moved to another device" (e.g. you picked the phone in the
+A click costs **one PUT** to Spotify, with no process start, no device
+list read, no play-state read and no token refresh on the way:
+
+- The widget runs one long-lived helper, `omarchy-spotify-switch serve`
+  (it exits with the shell). It keeps an HTTPS connection to Spotify open,
+  refreshes the access token ahead of time (10 minutes before it expires, in
+  the background) and keeps the device list and play state in the cache.
+- On a click the icon and tooltip switch to the target at once. The helper
+  sends `PUT /me/player` straight away using the cached list; only when that
+  device is gone (404) does it read the list again and move to the next one
+  that is there. The play state comes from the cache if it is under 15 s
+  old, otherwise one quick `GET /me/player` comes first.
+- About 1.5 s after a transfer the helper reads Spotify again to confirm.
+  Spotify can still name the old device for a moment, so for 6 s the
+  transfer's target wins over a lagging "old device" answer (a device picked
+  elsewhere still wins at once). The icon never flips back and forth.
+- The last known state shows at once on start: every answer is written to a
+  cache file (`status.json`) that the widget watches (an event, not a poll).
+- Spotify is read at start, after clicks, when the pointer rests on the icon
+  (at most every 10 s) and every 5 minutes. Spotify has no push channel for
+  "playback moved to another device" (e.g. you picked the phone in the
   Spotify app), so without that slow refresh the dim/lit state could stay
-  wrong for hours; 5 minutes is one small HTTPS request
-  (`/me/player/devices`) per bar, far from Spotify's rate limits. Set
-  `"refreshMinutes": 0` in the widget's shell.json entry to turn it off, or
-  another number of minutes.
+  wrong for hours; 5 minutes is two small HTTPS requests per bar, far from
+  Spotify's rate limits. Set `"refreshMinutes": 0` in the widget's
+  shell.json entry to turn it off, or another number of minutes.
+- If the helper is not running, clicks fall back to one-shot
+  `omarchy-spotify-switch next` runs (Python start, same cache logic).
+
+What stays slow is Spotify's own handoff: the PUT only returns once Spotify
+has told the target device, and the device then has to buffer and start the
+audio. On the XPS that was about 0.35 s for the PUT and 0.8 s until the
+position moved; the Pixel took 2.2 s just for the PUT (the phone app has to
+wake). The bar cannot speed that up.
+
+### Timing log (opt-in)
+
+`"timing": true` in the config (or `SPOTIFY_SWITCH_TIMING=1`) writes one JSON
+line per click to `~/.local/state/timon-spotify-switch/timing.log` (600,
+rotated at 256 KB): `queued` (widget click to helper), `get_devices` /
+`get_player` (only when the cache was too old), `token`, `put`,
+`cache_write`, `backend_total`, `answer_to_widget` and `click_to_widget`.
+A second `handoff` line says when Spotify reported the target active and
+its playback position moving, measured from the PUT's answer (this polls
+`GET /me/player` up to 10 s after each click, only while timing is on). No
+device ids or tokens are logged.
 
 ## Install
 
@@ -91,11 +123,12 @@ last update). Backups live in
 | Path | What |
 | --- | --- |
 | `plugin/timon.spotify-switch/` | the bar widget (`SpotifySwitch.qml`, `Cycle.js`, `manifest.json`) → `~/.config/omarchy/plugins/` |
-| `bin/omarchy-spotify-switch` | backend: `status`, `next [--from ID]`, `cached`, `login`, `logout` → `~/.local/bin/` |
+| `bin/omarchy-spotify-switch` | backend: `status`, `next [--from ID]`, `serve`, `cached`, `login`, `logout` → `~/.local/bin/` |
 | `bin/omarchy-spotify-switch-login` | the login helper |
 | `~/.config/timon-spotify-switch/config.json` | `client_id`, `order` (yours, never in git) |
 | `~/.local/state/timon-spotify-switch/token.json` | tokens: dir 700, file 600, written atomically |
 | `~/.local/state/timon-spotify-switch/status.json` | the last status the bar shows (no tokens) |
+| `~/.local/state/timon-spotify-switch/timing.log` | only with `"timing": true` |
 
 `SPOTIFY_SWITCH_CLIENT_ID` overrides the config's client ID.
 

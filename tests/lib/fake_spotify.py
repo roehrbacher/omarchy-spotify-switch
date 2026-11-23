@@ -25,9 +25,11 @@ S = {
     "force": {},
 }
 LOG = []
+START = time.time()
 
 
 class H(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"  # keep-alive, like Spotify
     def log_message(self, *a):
         pass
 
@@ -55,7 +57,7 @@ class H(BaseHTTPRequestHandler):
                 return self.reply(200, S)
         key = method + " " + u.path
         with lock:
-            LOG.append({"req": key, "auth": self.headers.get("Authorization") or "",
+            LOG.append({"req": key, "port": self.client_address[1], "auth": self.headers.get("Authorization") or "",
                         "body": raw.decode(errors="replace")})
             forced = S["force"].get(key) or []
             f = forced.pop(0) if forced else None
@@ -100,7 +102,8 @@ class H(BaseHTTPRequestHandler):
             act = [d for d in S["devices"] if d.get("is_active")]
             if not act:
                 return self.reply(204)
-            return self.reply(200, {"is_playing": S["playing"], "device": act[0]})
+            prog = int((time.time() - START) * 1000) if S["playing"] else 0
+            return self.reply(200, {"is_playing": S["playing"], "device": act[0], "progress_ms": prog})
         if u.path == "/v1/me/player" and method == "PUT":
             b = json.loads(raw or b"{}")
             ids = b.get("device_ids") or []

@@ -2,6 +2,32 @@
 
 Versions match `manifest.json` and `VERSION`; each commit subject starts with its version.
 
+## 0.1.1
+
+Clicks are fast: one PUT to Spotify instead of a Python start plus three
+requests on fresh connections (measured on the XPS: about 0.6–1.2 s of our
+own time before Spotify even started its handoff, now about 0.1 s plus
+Spotify's PUT).
+
+- New `omarchy-spotify-switch serve`: a long-lived helper the widget starts
+  (exits with the shell). It keeps one HTTPS connection to Spotify open,
+  refreshes the token in the background 10 min before it expires and takes
+  clicks over stdin, so no Python start and no TLS handshake on a click.
+- A click uses the cached device list and play state (refreshed in the
+  background, on hover at most every 10 s, ~1.5 s after a transfer and every
+  5 min); it reads the list again only on a 404 (device gone) and then moves
+  to the next device that is there. Play state older than 15 s is read first.
+- Paused sessions move without a `play` flag (Spotify keeps the state)
+  instead of `play: false`.
+- The optimistic icon/tooltip stays until the answer; Spotify still naming
+  the old device for a moment after a transfer no longer flips it back (6 s
+  window; a device picked elsewhere still wins).
+- All HTTP goes through `http.client` with keep-alive; heavy imports are
+  lazy (`cached` starts faster).
+- Opt-in timing log (`"timing": true`): per-click stages and Spotify's
+  handoff time.
+- One-shot `next` and `status` still work and fall back the same way.
+
 ## 0.1.0
 
 - First version: one Spotify icon (nf-fa-spotify) in the bar. Left click moves
