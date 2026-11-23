@@ -33,7 +33,7 @@ SD=$XDG_STATE_HOME/timon-spotify-switch; mkdir -p "$SD"; chmod 700 "$SD"
 printf '{"access_token":"acc-0","refresh_token":"ref-0","expires_at":%d}\n' $(( $(date +%s) + 3600 )) >"$SD/token.json"; chmod 600 "$SD/token.json"
 fake "{\"devices\":[$(dev xps XPS true),$(dev pc 'gaming PC'),$(dev px 'Pixel 10 Pro'),$(dev ks 'Kitchen speaker'),$(dev ar Arcade)],\"playing\":true}"
 omarchy-spotify-switch status >/dev/null               # last session's cache
-fake '{"force":{"GET /v1/me/player/devices":[{"delay":1.5}]}}'   # this session's first read is slow
+fake '{"force":{"GET /v1/me/player/devices":[{"delay":1.5},{"delay":1.5},{"delay":1.5}]}}'   # first reads (three bar entries) are slow
 ln -s "$shell/Commons" "$tmp/qs/Commons"; ln -s "$shell/Ui" "$tmp/qs/Ui"
 cp "$here/shell.qml" "$tmp/qs/shell.qml"
 export SW_SRC=$root/plugin/timon.spotify-switch SW_SHOTS=${1:-$tmp}

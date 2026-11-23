@@ -2,6 +2,15 @@
 
 Versions match `manifest.json` and `VERSION`; each commit subject starts with its version.
 
+## 0.1.2
+
+- The icon is configurable: `"icon"` per bar entry (shell.json) or in
+  config.json, as a preset (`spotify` default, `devices`,
+  `monitor-speaker`), `U+XXXX`, or a glyph. Unknown values fall back to the
+  Spotify logo.
+- Several bar entries are allowed (`allowMultiple`), for trying icons side
+  by side; a click on one updates the others through the cache file.
+
 ## 0.1.1
 
 Clicks are fast: one PUT to Spotify instead of a Python start plus three

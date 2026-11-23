@@ -45,6 +45,24 @@ something failed. The tooltip says what:
 | `Spotify: <device> (offline, last known)` | no network |
 | `Spotify: <device> is no longer available` | the device left between the list and the click |
 
+## Icon
+
+The icon is a glyph from the Nerd Font the bar already uses, so it follows
+the theme colour and the stock dim/lit states. Pick it with `"icon"`:
+
+| Value | Glyph |
+| --- | --- |
+| `spotify` (default) | nf-fa-spotify, the Spotify logo |
+| `devices` | nf-md-devices (a phone next to a monitor) |
+| `monitor-speaker` | nf-md-monitor_speaker (a monitor with a speaker) |
+| `U+F04C3` or the glyph itself | any other Nerd Font glyph |
+
+Set it for every bar entry in `config.json` (`"icon": "devices"`), or per
+bar entry in `~/.config/omarchy/shell.json`:
+`{"id": "timon.spotify-switch", "icon": "devices"}`. The bar entry wins.
+The widget allows several entries, e.g. to compare icons side by side; each
+one is a full, working switcher.
+
 ## Speed
 
 A click costs **one PUT** to Spotify, with no process start, no device
