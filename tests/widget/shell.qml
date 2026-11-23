@@ -33,7 +33,7 @@ ShellRoot {
     Rectangle { id: canvas; anchors.fill: parent; color: "#1e1e2e"
     Rectangle { id: strip; width: parent.width; height: 30; color: "#181825"
       Item { id: slot; x: 300; y: 0; width: 27; height: 30 }
-      // The icon trial: the same widget twice more, only "icon" differs.
+      // Multiple entries: the same widget twice more, only "icon" differs.
       Item { id: slot2; x: 327; y: 0; width: 27; height: 30 }
       Item { id: slot3; x: 354; y: 0; width: 27; height: 30 }
     }

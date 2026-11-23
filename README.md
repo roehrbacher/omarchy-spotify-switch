@@ -60,8 +60,8 @@ the theme colour and the stock dim/lit states. Pick it with `"icon"`:
 Set it for every bar entry in `config.json` (`"icon": "devices"`), or per
 bar entry in `~/.config/omarchy/shell.json`:
 `{"id": "timon.spotify-switch", "icon": "devices"}`. The bar entry wins.
-The widget allows several entries, e.g. to compare icons side by side; each
-one is a full, working switcher.
+The widget allows several bar entries, each with its own icon; each one is
+a full, working switcher, and a click on one updates the others.
 
 ## Speed
 

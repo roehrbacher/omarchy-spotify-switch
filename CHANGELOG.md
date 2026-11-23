@@ -2,6 +2,11 @@
 
 Versions match `manifest.json` and `VERSION`; each commit subject starts with its version.
 
+## 0.1.4
+
+- Docs: neutral description of the `icon` setting and of multiple bar
+  entries in the README and changelog.
+
 ## 0.1.3
 
 Pre-release review fixes, LICENSE and a public README.
@@ -25,8 +30,8 @@ Pre-release review fixes, LICENSE and a public README.
   config.json, as a preset (`spotify` default, `devices`,
   `monitor-speaker`), `U+XXXX`, or a glyph. Unknown values fall back to the
   Spotify logo.
-- Several bar entries are allowed (`allowMultiple`), for trying icons side
-  by side; a click on one updates the others through the cache file.
+- Several bar entries are allowed (`allowMultiple`), each with its own
+  icon; a click on one updates the others through the cache file.
 
 ## 0.1.1
 
