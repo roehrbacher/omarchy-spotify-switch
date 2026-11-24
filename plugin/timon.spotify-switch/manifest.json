@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "timon.spotify-switch",
   "name": "Spotify Switcher",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "author": "Timon Röhrbacher",
   "description": "One bar icon: click to move playback to the next Spotify Connect device",
   "kinds": [
@@ -13,7 +13,7 @@
   },
   "barWidget": {
     "displayName": "Spotify Switcher",
-    "description": "Click to move Spotify to the next device (tooltip: current device)",
+    "description": "Click to move Spotify to the next device (dimmed when not playing or on errors)",
     "category": "Media",
     "allowMultiple": true
   }

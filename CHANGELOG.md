@@ -2,6 +2,21 @@
 
 Versions match `manifest.json` and `VERSION`; each commit subject starts with its version.
 
+## 0.1.6
+
+- No hover tooltip on the bar icon any more, like Omarchy's own bar icons.
+  The icon stays dimmed for errors, no device and logged out; a click that
+  cannot switch or fails now shows a desktop notification with the reason,
+  a click while logged out still opens the login, and a login that does not
+  finish is notified. The `status` command keeps its `tooltip` text.
+- Spotify is no longer read on hover (reads: start, clicks, every
+  `refreshMinutes`, cache file events).
+- The repo is now `roehrbacher/omarchy-spotify-device-switch`. Install
+  backups moved to `~/.local/share/omarchy-config-backups/omarchy-spotify-device-switch/`
+  (install.sh and uninstall.sh move an old `omarchy-spotify-switch` backup
+  folder there). Plugin id `timon.spotify-switch` and the command names are
+  unchanged.
+
 ## 0.1.5
 
 - The icon is now the monitor-speaker glyph (nf-md-monitor_speaker,

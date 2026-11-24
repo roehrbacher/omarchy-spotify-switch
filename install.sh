@@ -1,7 +1,7 @@
 #!/bin/bash
 # Install or update Spotify Switcher (timon.spotify-switch) for this user.
 # Backs up every file it replaces to
-#   ~/.local/share/omarchy-config-backups/omarchy-spotify-switch/backup-<time>/
+#   ~/.local/share/omarchy-config-backups/omarchy-spotify-device-switch/backup-<time>/
 # (uninstall.sh restores it). Never touches shell.json, never restarts the
 # shell, never overwrites your config.json or tokens.
 #   ./install.sh            install / update
@@ -12,7 +12,13 @@ cd "$(dirname "$0")"
 DRY=0; [[ ${1:-} == --dry-run ]] && DRY=1
 for c in python3 xdg-open; do command -v "$c" >/dev/null || { echo "Needs $c."; exit 1; }; done
 ID=timon.spotify-switch
-BKROOT="$HOME/.local/share/omarchy-config-backups/omarchy-spotify-switch"
+BKROOT="$HOME/.local/share/omarchy-config-backups/omarchy-spotify-device-switch"
+# Backups from before the repo rename (0.1.6) move to the new folder.
+OLDBK="$HOME/.local/share/omarchy-config-backups/omarchy-spotify-switch"
+if [[ -d $OLDBK && ! -L $OLDBK ]] && (( ! ${DRY:-0} )); then
+  mkdir -p "$BKROOT"; for d in "$OLDBK"/*; do [[ -e $d ]] && mv -n "$d" "$BKROOT/"; done
+  rmdir "$OLDBK" 2>/dev/null || true
+fi
 BK="$BKROOT/backup-$(date +%Y%m%d-%H%M%S)"
 put() { # put <src> <dest under $HOME> <mode>
   local dest="$HOME/$2"

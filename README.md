@@ -1,8 +1,8 @@
 # Spotify Switcher for Omarchy
 
 One bar icon in the Omarchy bar (`timon.spotify-switch`). **Left click**
-moves Spotify playback to the next Spotify Connect device; the tooltip names
-the device that plays now. No popup, no panel.
+moves Spotify playback to the next Spotify Connect device. Like Omarchy's own
+bar icons it has no hover tooltip, and there is no popup or panel.
 
 ## What a click does
 
@@ -24,15 +24,20 @@ the device that plays now. No popup, no panel.
    which Spotify documents as "keep the current state", so a click never
    starts music by surprise.
 
-With only one device available, a click just says "Spotify: XPS (only device
-available)" in the tooltip. (One device that is *not* active yet is the
+With only one device available, a click just shows a notification "XPS (only
+device available)". (One device that is *not* active yet is the
 "none active" case: the click moves playback to it.)
 
 The icon is lit while a device plays Spotify and dimmed (stock
 `WidgetButton.dimmed`) when there is no device, you are not logged in, or
-something failed. The tooltip says what:
+something failed. When a click cannot switch, or the switch fails, a desktop
+notification (`notify-send`, app "Spotify Switcher") says why; a successful
+switch shows none. A click while logged out opens the login in your browser,
+and a login that does not finish is notified too. `omarchy-spotify-switch
+status` prints the current state as JSON; its `tooltip` field holds the same
+text:
 
-| Tooltip | Meaning |
+| Text | Meaning |
 | --- | --- |
 | `Spotify: <device>` | that device has the session |
 | `Spotify: no active device, click to play on <device>` | devices there, none active |
@@ -61,7 +66,7 @@ list read, no play-state read and no token refresh on the way:
   (it exits with the shell). It keeps an HTTPS connection to Spotify open,
   refreshes the access token ahead of time (10 minutes before it expires, in
   the background) and keeps the device list and play state in the cache.
-- On a click the icon and tooltip switch to the target at once. The helper
+- On a click the widget switches to the target at once. The helper
   sends `PUT /me/player` straight away using the cached list; only when that
   device is gone (404) does it read the list again and move to the next one
   that is there. The play state comes from the cache if it is under 15 s
@@ -72,8 +77,7 @@ list read, no play-state read and no token refresh on the way:
   elsewhere still wins at once). The icon never flips back and forth.
 - The last known state shows at once on start: every answer is written to a
   cache file (`status.json`) that the widget watches (an event, not a poll).
-- Spotify is read at start, after clicks, when the pointer rests on the icon
-  (at most every 10 s) and every 5 minutes. Spotify has no push channel for
+- Spotify is read at start, after clicks and every 5 minutes. Spotify has no push channel for
   "playback moved to another device" (e.g. you picked the phone in the
   Spotify app), so without that slow refresh the dim/lit state could stay
   wrong for hours; 5 minutes is two small HTTPS requests per bar, far from
@@ -108,7 +112,8 @@ device ids or tokens are logged.
   through the Web API; without it every click shows "Premium needed to
   switch devices".
 - Your own Spotify developer app (free). This plugin ships no client ID.
-- `python3` (standard library only) and `xdg-open`, both part of Omarchy.
+- `python3` (standard library only), `xdg-open` and `notify-send`, all part
+  of Omarchy.
 
 ## Spotify app setup
 
@@ -124,8 +129,8 @@ device ids or tokens are logged.
 
 ## Install
 
-1. `git clone https://github.com/roehrbacher/omarchy-spotify-switch ~/Work/omarchy-spotify-switch`
-2. `cd ~/Work/omarchy-spotify-switch && ./install.sh` (`--dry-run` lists the
+1. `git clone https://github.com/roehrbacher/omarchy-spotify-device-switch ~/Work/omarchy-spotify-device-switch`
+2. `cd ~/Work/omarchy-spotify-device-switch && ./install.sh` (`--dry-run` lists the
    changes first; nothing is installed system-wide and nothing runs as root)
 3. Put your client ID in `~/.config/timon-spotify-switch/config.json`
    (created by the installer, mode 600):
@@ -143,7 +148,7 @@ Update: `git pull && ./install.sh`. Undo: `./uninstall.sh` (plugin and
 helpers; keeps your login), `./uninstall.sh --purge` (also deletes tokens,
 cache and config), `./uninstall.sh --last` (back to the version before the
 last update). Backups live in
-`~/.local/share/omarchy-config-backups/omarchy-spotify-switch/`.
+`~/.local/share/omarchy-config-backups/omarchy-spotify-device-switch/`.
 
 ## Files
 

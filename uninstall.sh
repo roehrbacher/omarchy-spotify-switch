@@ -5,7 +5,13 @@
 #   ./uninstall.sh --purge  like the default, and also delete tokens, cache and config
 set -euo pipefail
 ID=timon.spotify-switch
-BKROOT="$HOME/.local/share/omarchy-config-backups/omarchy-spotify-switch"
+BKROOT="$HOME/.local/share/omarchy-config-backups/omarchy-spotify-device-switch"
+# Backups from before the repo rename (0.1.6) move to the new folder.
+OLDBK="$HOME/.local/share/omarchy-config-backups/omarchy-spotify-switch"
+if [[ -d $OLDBK && ! -L $OLDBK ]] && (( ! 0 )); then
+  mkdir -p "$BKROOT"; for d in "$OLDBK"/*; do [[ -e $d ]] && mv -n "$d" "$BKROOT/"; done
+  rmdir "$OLDBK" 2>/dev/null || true
+fi
 if [[ ${1:-} == --last ]]; then
   BK=$(ls -d "$BKROOT"/backup-* 2>/dev/null | sort | tail -1)
   [[ -n $BK ]] || { echo "No backup found in $BKROOT"; exit 1; }

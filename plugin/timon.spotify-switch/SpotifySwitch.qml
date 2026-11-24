@@ -6,16 +6,21 @@ import qs.Ui
 import "Cycle.js" as Cycle
 
 // Spotify Switcher: one bar icon. Left click moves Spotify playback to the
-// next Spotify Connect device in a fixed cycle. The tooltip names the
-// current device.
+// next Spotify Connect device in a fixed cycle.
+//
+// No hover tooltip (vanilla Omarchy bar icons have none). Feedback: the icon
+// is lit while Spotify plays on a known device and dimmed otherwise (errors,
+// logged out, no device). A click that cannot switch, or whose switch fails,
+// shows a desktop notification with the reason. A click while logged out
+// opens the login in the browser.
 //
 // Speed: a long-lived helper (`omarchy-spotify-switch serve`) keeps the
 // token fresh, one HTTPS connection to Spotify open and the device list and
-// play state cached, so a click is one PUT with no process start. The icon
-// and tooltip show the target at once and stay there unless the PUT fails.
+// play state cached, so a click is one PUT with no process start. The widget
+// shows the target at once and keeps it unless the PUT fails.
 // The last known status comes from the backend's cache file at once (watched,
-// no polling). Spotify is read at start, ~1.5 s after a click (confirm), on
-// hover (at most every 10 s) and every `refreshMinutes` (default 5, 0 = off).
+// no polling). Spotify is read at start, ~1.5 s after a click (confirm) and
+// every `refreshMinutes` (default 5, 0 = off).
 // If the helper is down, clicks fall back to one-shot `next` runs.
 BarWidget {
   id: root
@@ -26,7 +31,10 @@ BarWidget {
   readonly property real refreshMinutes: Number(root.setting("refreshMinutes", 5))
   // Fixed icon: nf-md-monitor_speaker (U+F0F5F) from the bar's Nerd Font.
   readonly property string icon: String.fromCodePoint(0xF0F5F)
-  readonly property int hoverThrottleMs: 10000
+  // Desktop notification for click feedback; the text is appended.
+  property var notifyCommand: ["notify-send", "--app-name=Spotify Switcher", "Spotify Switcher"]
+  property string lastNotice: ""
+  property int noticeCount: 0
 
   // Last status from the backend: {state, device, next, devices, tooltip}.
   property var st: ({ state: "unknown", devices: [], tooltip: "Spotify" })
@@ -49,7 +57,9 @@ BarWidget {
   property bool helperReading: false
   readonly property bool loggedOut: st.state === "need_login" || st.state === "no_client_id"
   readonly property bool lit: !!root.shown && (st.state === "ok" || root.pending)
-  readonly property string tip: root.clickNote !== "" ? root.clickNote : String(st.tooltip || "Spotify")
+  // The current state in words (backend text, or a click's note). Not shown on
+  // hover; used for notifications and tests.
+  readonly property string message: root.clickNote !== "" ? root.clickNote : String(st.tooltip || "Spotify")
 
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
@@ -70,6 +80,17 @@ BarWidget {
     root.clickNote = ""
   }
 
+  function notice(text) {
+    root.lastNotice = String(text || "")
+    root.noticeCount++
+    Quickshell.execDetached(root.notifyCommand.concat([root.lastNotice.replace(/^Spotify: /, "")]))
+  }
+
+  // A click's answer: anything but a successful switch is told once.
+  function clickAnswer(s) {
+    if (s && s.state !== "ok") root.notice(String(s.tooltip || "Spotify: switch failed"))
+  }
+
   function refresh() {
     root.lastRead = Date.now()
     if (root.helperUp) { root.helperReading = true; helper.write("status\n"); return }
@@ -80,10 +101,12 @@ BarWidget {
 
   function click() {
     root.clickGen++
-    if (st.state === "no_client_id") { root.clickNote = String(st.tooltip || "Spotify: no client ID set"); return }
+    if (st.state === "no_client_id") { root.clickNote = String(st.tooltip || "Spotify: no client ID set"); root.notice(root.clickNote); return }
     if (st.state === "need_login") {
+      if (loginProc.running) { root.notice("Spotify: the login is already open in your browser"); return }
       root.clickNote = "Spotify: opening the login in your browser"
-      Quickshell.execDetached(["omarchy-spotify-switch-login"])
+      root.notice(root.clickNote)
+      loginProc.running = true
       return
     }
     var from = root.shown ? root.shown.id : ""
@@ -93,6 +116,7 @@ BarWidget {
       root.clickNote = "Spotify: " + target.name
     } else if (root.shown) {
       root.clickNote = "Spotify: " + root.shown.name + " (only device available)"
+      root.notice(root.clickNote)
     }
     root.inFlight++
     if (root.helperUp) {
@@ -116,6 +140,7 @@ BarWidget {
       if (s.click_ms) helper.write("seen " + s.click_ms + " " + Date.now() + "\n")
       // A later click is still in flight: keep showing its target.
       if (root.inFlight === 0) root.apply(s, true)
+      root.clickAnswer(s)
     } else {
       root.helperReading = false
       root.apply(s, false)
@@ -131,7 +156,15 @@ BarWidget {
     onTriggered: { root.inFlight = 0; root.clickNote = ""; root.refresh() }
   }
 
-  onTipChanged: if (button.tooltipHovered && root.bar) root.bar.showTooltip(button, root.tip)
+  // The login helper; a login that does not finish is told.
+  Process {
+    id: loginProc
+    command: [root.cli + "-login"]
+    onExited: function(code) {
+      if (code !== 0) root.notice("Spotify: login did not finish (run omarchy-spotify-switch-login)")
+      root.refresh()
+    }
+  }
 
   // The long-lived helper; restarted a moment after it ends.
   Process {
@@ -180,7 +213,9 @@ BarWidget {
         return
       }
       root.inFlight = 0
-      root.apply(root.parse(text), true)
+      var s = root.parse(text)
+      root.apply(s, true)
+      root.clickAnswer(s || { state: "error", tooltip: "Spotify: switch failed" })
     }
   }
 
@@ -209,8 +244,6 @@ BarWidget {
     bar: root.bar
     text: root.icon
     dimmed: !root.lit
-    tooltipText: root.tip
-    onTooltipHoveredChanged: if (tooltipHovered && Date.now() - root.lastRead > root.hoverThrottleMs) root.refresh()
     onPressed: function(b) { if (b === Qt.LeftButton) root.click() }
   }
 }

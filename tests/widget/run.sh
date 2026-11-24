@@ -2,9 +2,10 @@
 # timon.spotify-switch bar icon in an offscreen, software-rendered Quickshell
 # with the real backend against the fake Spotify: cached state shows before
 # Spotify answers, a click shows the next device at once and the backend
-# follows, rapid clicks end on the last target, 403 Premium and one-device
-# tooltips, logged-out state arrives via the cache file watch. Saves PNGs of
-# the icon + tooltip when asked. Temp XDG dirs only.
+# follows, rapid clicks end on the last target, no hover tooltip, 403 Premium
+# and one-device clicks give a notification (stub notify-send), logged-out
+# state arrives via the cache file watch and a click then runs the login
+# (stub). Saves PNGs of the icon when asked. Temp XDG dirs only.
 #   bash tests/widget/run.sh [shots-dir]
 #   OMARCHY_SHELL=<omarchy>/shell   Omarchy's shell sources (default /usr/share/omarchy/shell)
 set -u
@@ -25,7 +26,13 @@ cleanup() { [[ -n $qs ]] && kill -KILL -- -"$qs" 2>/dev/null; kill "$fake" 2>/de
 trap cleanup EXIT
 for _ in $(seq 50); do [[ -s $tmp/port ]] && break; sleep 0.1; done
 F=http://127.0.0.1:$(cat "$tmp/port")
-export SPOTIFY_SWITCH_API=$F SPOTIFY_SWITCH_ACCOUNTS=$F PATH="$root/bin:$PATH"
+# Stubs: notifications go to a file; the login helper records it ran and fails.
+mkdir -p "$tmp/stub"
+printf '#!/bin/bash\nprintf "%%s\\n" "${*: -1}" >>"%s/notices"\n' "$tmp" >"$tmp/stub/notify"
+printf '#!/bin/bash\ntouch "%s/login-ran"; exit 1\n' "$tmp" >"$tmp/stub/omarchy-spotify-switch-login"
+chmod +x "$tmp/stub/"*
+export SW_NOTIFY=$tmp/stub/notify
+export SPOTIFY_SWITCH_API=$F SPOTIFY_SWITCH_ACCOUNTS=$F PATH="$tmp/stub:$root/bin:$PATH"
 fake() { curl -s -X POST --data "$1" "$F/test/state" >/dev/null; }
 dev() { printf '{"id":"%s","name":"%s","type":"Computer","is_active":%s}' "$1" "$2" "${3:-false}"; }
 echo '{"client_id":"test-client","order":["Pixel","gaming PC","XPS"],"icon":"devices"}' >"$XDG_CONFIG_HOME/timon-spotify-switch/config.json"
@@ -49,6 +56,11 @@ for _ in $(seq 500); do
 done
 sleep 0.3
 kill -KILL -- -"$qs" 2>/dev/null; wait "$qs" 2>/dev/null; qs=""
+chk() { if eval "$2"; then echo "SW $1 ok" >>"$tmp/out"; else echo "SW $1 want=true FAIL" >>"$tmp/out"; fi; }
+chk "notify-send got the Premium reason" 'grep -qx "Premium needed to switch devices" "$tmp/notices" 2>/dev/null'
+chk "notify-send got the one-device note" 'grep -qx "XPS (only device available)" "$tmp/notices" 2>/dev/null'
+chk "logged-out click ran the login helper" '[[ -e $tmp/login-ran ]]'
+chk "a failed login is notified" 'grep -qx "login did not finish (run omarchy-spotify-switch-login)" "$tmp/notices" 2>/dev/null'
 grep -E 'SW |rror|warn' "$tmp/out" | grep -v -e qt.qpa -e "SW CTL"
 p=$(grep -c ' ok$' "$tmp/out"); f=$(grep -c 'want=.* FAIL$' "$tmp/out")
 [[ -n ${1:-} ]] && ls "$SW_SHOTS"/[0-9]-*.png 2>/dev/null | sed 's/^/shot: /'
