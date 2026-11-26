@@ -160,6 +160,86 @@ fake "{\"devices\":[$(dev xps XPS),$(dev pc 'gaming PC' true),$(dev px 'Pixel 10
 jq '.transfer.at_ms -= 7000' "$SD/status.json" >"$TMP/c" && mv "$TMP/c" "$SD/status.json"
 ok "  and after 6 s Spotify's word counts again" '[[ $("$B" status | jq -r .device.name) == "gaming PC" ]]'
 
+# --- to ID: the popup's choice (0.2.0) ---
+token "$(fstate .access)" "$(fstate .refresh)" 3600; five; "$B" status >/dev/null
+n0=$(flog | jq length)
+T=$("$B" to px)
+ok "to px: XPS -> Pixel 10 Pro (not the cycle's next), ok" '[[ $(jq -r ".state + \"|\" + .device.name" <<<"$T") == "ok|Pixel 10 Pro" && $(fstate ".devices[] | select(.is_active) | .id") == px ]]'
+ok "  fresh cache: exactly one request, the PUT, keeps playing" '[[ $(flog | jq -c "[.[$n0:][] | .req]") == "[\"PUT /v1/me/player\"]" && $(put_body | jq -c .) == "{\"device_ids\":[\"px\"],\"play\":true}" ]]'
+ok "  cache updated: Pixel active, transfer recorded" '[[ $(jq -r ".device.id + \"|\" + .transfer.id + \"|\" + .transfer.from" "$SD/status.json") == "px|px|xps" ]]'
+before=$(logcount "PUT /v1/me/player")
+ok "to the active device: no transfer, says where it plays" '[[ $("$B" to px | jq -r ".state + \"|\" + .tooltip") == "ok|Spotify: Pixel 10 Pro" && $(logcount "PUT /v1/me/player") == "$before" ]]'
+rm -f "$SD/status.json"   # no 6 s trust window from the last transfer
+fake "{\"devices\":[$(dev xps XPS true),$(dev px Pixel)],\"playing\":false}"; "$B" status >/dev/null
+"$B" to px >/dev/null
+ok "paused stays paused: no play flag" '[[ $(put_body | jq -c "has(\"play\")") == false && $(fstate ".devices[] | select(.is_active) | .id") == px ]]'
+fake "{\"devices\":[$(dev xps XPS true),$(dev tv TV false true)]}"; "$B" status >/dev/null
+before=$(logcount "PUT /v1/me/player")
+ok "to a restricted device: refused with a reason, no PUT" '[[ $("$B" to tv | jq -r .tooltip) == "Spotify: TV can'"'"'t be controlled from here" && $(logcount "PUT /v1/me/player") == "$before" ]]'
+five; "$B" status >/dev/null
+g0=$(logcount "GET /v1/me/player/devices"); before=$(logcount "PUT /v1/me/player")
+ok "to an id not in the cache: reads the list once, then says it is gone" '[[ $("$B" to nope | jq -r .tooltip) == "Spotify: that device is no longer available" && $(( $(logcount "GET /v1/me/player/devices") - g0 )) == 1 && $(logcount "PUT /v1/me/player") == "$before" ]]'
+fake "{\"devices\":[$(dev xps XPS true),$(dev pc 'gaming PC'),$(dev px 'Pixel 10 Pro'),$(dev ks 'Kitchen speaker'),$(dev ar Arcade),$(dev new 'New speaker')]}"
+ok "to a device that just appeared (not cached yet): found on the re-read, moves" '[[ $("$B" to new | jq -r .device.name) == "New speaker" ]]'
+five; "$B" status >/dev/null
+fake "{\"devices\":[$(dev xps XPS true),$(dev pc 'gaming PC')]}"
+ok "404 (chosen device left): fresh list, no move to another device" 'R=$("$B" to ar); [[ $(jq -r .tooltip <<<"$R") == "Spotify: Arcade is no longer available" && $(jq -r "[.devices[].id] | join(\",\")" <<<"$R") == "pc,xps" && $(fstate ".devices[] | select(.is_active) | .id") == xps ]]'
+fake '{"force":{"PUT /v1/me/player":[{"status":403,"body":{"error":{"status":403,"message":"Player command failed: Premium required","reason":"PREMIUM_REQUIRED"}}}]}}'
+five; "$B" status >/dev/null
+ok "to with 403 Premium -> premium state, reason in the text" '[[ $("$B" to ar | jq -r ".state + \"|\" + .tooltip") == "premium|Spotify: Premium needed to switch devices" ]]'
+ok "to without an id: usage, exit 2" '"$B" to >/dev/null 2>&1; [[ $? == 2 ]]'
+
+# --- disabled devices: never switch to them (0.2.1) ---
+cp "$CFG" "$TMP/cfg.keep"; rm -f "$SD/status.json"
+token "$(fstate .access)" "$(fstate .refresh)" 3600; five; "$B" status >/dev/null
+ok "all devices are enabled by default" '"$B" status | jq -e "[.devices[].enabled] | all" >/dev/null'
+D=$("$B" disable ar)
+ok "disable ar: config gets {id, name}, client_id and order stay" '[[ $(jq -c ".disabled" "$CFG") == "[{\"id\":\"ar\",\"name\":\"Arcade\"}]" && $(jq -r ".client_id" "$CFG") == test-client && $(jq -c .order "$CFG") == "[\"Pixel\",\"gaming PC\",\"XPS\"]" ]]'
+ok "  config.json stays mode 600 and valid, no temp file left" '[[ $(perm "$CFG") == 600 ]] && jq -e . "$CFG" >/dev/null && [[ $(ls -A "$(dirname "$CFG")" | wc -l) == 1 ]]'
+ok "  the cache shows it at once (Arcade off, next skips it)" '[[ $(jq -r ".devices[] | select(.id == \"ar\") | .enabled" "$SD/status.json") == false && $(jq -r .next.name "$SD/status.json") == "Kitchen speaker" ]]'
+ok "  prints what changed" '[[ $(jq -c . <<<"$D") == "{\"id\":\"ar\",\"name\":\"Arcade\",\"enabled\":false}" ]]'
+ok "status marks it: only Arcade is disabled" '[[ $("$B" status | jq -r "[.devices[] | select(.enabled | not) | .name] | join(\",\")") == Arcade ]]'
+ok "disabling twice adds no second entry" '"$B" disable ar >/dev/null; [[ $(jq ".disabled | length" "$CFG") == 1 ]]'
+ok "next skips the disabled device (XPS -> Kitchen speaker, not Arcade)" '[[ $("$B" next | jq -r .device.name) == "Kitchen speaker" ]]'
+"$B" disable ks >/dev/null
+ok "the active device may be disabled: it stays active and shown" '[[ $("$B" status | jq -r "(.device.name) + \"|\" + (.device.enabled | tostring)") == "Kitchen speaker|false" ]]'
+ok "  cycling from it goes to the next enabled one (wraps to Pixel 10 Pro)" '[[ $("$B" next | jq -r .device.name) == "Pixel 10 Pro" ]]'
+before=$(logcount "PUT /v1/me/player")
+ok "to a disabled device: refused with a reason, no PUT" '[[ $("$B" to ar | jq -r .tooltip) == "Spotify: Arcade is turned off for switching" && $(logcount "PUT /v1/me/player") == "$before" ]]'
+ok "enable ar: entry gone, other entries stay" '"$B" enable ar >/dev/null; [[ $(jq -c "[.disabled[].id]" "$CFG") == "[\"ks\"]" ]]'
+ok "  next can reach Arcade again" '[[ $("$B" to ar | jq -r .device.name) == Arcade ]]'
+ok "enable the last one: the key disappears, the rest of the config stays" '"$B" enable ks >/dev/null; jq -e "has(\"disabled\") | not" "$CFG" >/dev/null && [[ $(jq -r .client_id "$CFG") == test-client ]]'
+# The id can change: a name entry matches when its id is not in Spotify's list.
+"$B" disable ar >/dev/null
+fake "{\"devices\":[$(dev xps XPS true),$(dev ar2 Arcade),$(dev pc 'gaming PC')]}"
+ok "id changed (ar -> ar2), same name: still disabled" '[[ $("$B" status | jq -r "[.devices[] | select(.enabled | not) | .id] | join(\",\")") == ar2 ]]'
+fake "{\"devices\":[$(dev xps XPS true),$(dev ar 'Arcade (renamed)'),$(dev pc 'gaming PC')]}"
+ok "name changed, same id: still disabled (the id wins)" '[[ $("$B" status | jq -r "[.devices[] | select(.enabled | not) | .id] | join(\",\")") == ar ]]'
+fake "{\"devices\":[$(dev xps XPS true),$(dev ar Arcade),$(dev ar3 Arcade)]}"
+ok "two devices with one name: the id match wins, the other stays enabled" '[[ $("$B" status | jq -r "[.devices[] | select(.enabled | not) | .id] | join(\",\")") == ar ]]'
+fake "{\"devices\":[$(dev xps XPS true),$(dev ar2 Arcade)]}"; "$B" status >/dev/null
+ok "disable by a new id refreshes the stored id of the name match" '"$B" disable ar2 >/dev/null; [[ $(jq -c "[.disabled[] | .id]" "$CFG") == "[\"ar2\"]" ]]'
+ok "a hand-written name entry works too" 'echo "{\"client_id\":\"test-client\",\"disabled\":[\"arcade\"]}" >"$CFG"; [[ $("$B" status | jq -r "[.devices[] | select(.enabled | not) | .id] | join(\",\")") == ar2 ]]'
+five; "$B" status >/dev/null
+for i in xps pc px ks ar; do "$B" disable $i >/dev/null; done
+before=$(logcount "PUT /v1/me/player")
+A=$("$B" next)
+ok "every device disabled: a right click says so and sends nothing" '[[ $(jq -r ".state + \"|\" + .tooltip" <<<"$A") == "ok|Spotify: all devices are turned off (left click to turn one on)" && $(logcount "PUT /v1/me/player") == "$before" ]]'
+ok "  status: playback stays where it is, nothing is next" '"$B" status | jq -e ".device.name == \"XPS\" and .next == null" >/dev/null'
+fake "{\"devices\":[$(dev xps XPS false),$(dev pc 'gaming PC')]}"; "$B" status >/dev/null
+ok "  nothing active and all disabled: the status text says so" '[[ $("$B" status | jq -r .tooltip) == "Spotify: all devices are turned off" ]]'
+five; "$B" status >/dev/null
+for i in xps pc px ks ar; do "$B" enable $i >/dev/null; done
+"$B" disable pc >/dev/null; "$B" disable px >/dev/null; "$B" disable ks >/dev/null; "$B" disable ar >/dev/null
+ok "only the active device enabled: a right click says so" '[[ $("$B" next | jq -r .tooltip) == "Spotify: XPS (only enabled device)" ]]'
+for i in pc px ks ar; do "$B" enable $i >/dev/null; done
+printf '{"client_id": "test-client", broken' >"$CFG"; cp "$CFG" "$TMP/cfg.bad"
+ok "an unreadable config.json is never overwritten" '! "$B" disable ar >/dev/null 2>"$TMP/err" && cmp -s "$CFG" "$TMP/cfg.bad" && grep -q "not valid JSON" "$TMP/err"'
+rm -f "$CFG"
+ok "no config.json yet: disable creates it, mode 600" '"$B" disable ar >/dev/null && [[ $(jq -c .disabled "$CFG") == "[{\"id\":\"ar\",\"name\":\"Arcade\"}]" && $(perm "$CFG") == 600 ]]'
+ok "enable/disable without an id: usage, exit 2" '"$B" disable >/dev/null 2>&1; [[ $? == 2 ]]'
+cp "$TMP/cfg.keep" "$CFG"; rm -f "$SD/status.json"; five; "$B" status >/dev/null
+
 # --- serve: the bar's long-lived helper ---
 five; token "$(fstate .access)" "$(fstate .refresh)" 300   # expires in 5 min
 r0=$(logcount "POST /api/token")
@@ -178,6 +258,12 @@ ok "  confirms with Spotify 1.5 s later (status line), still Arcade" 'sleep 1.7;
 ok "  keep-alive: the click reused the connection the start-up read opened" '[[ $(flog | jq -r "[.[] | select(.req == \"PUT /v1/me/player\")] | last | .port") == $(flog | jq -r "[.[:$n0][] | select(.req == \"GET /v1/me/player\")] | last | .port") ]]'
 echo "next $(jq -r .device.id <<<"$L") 0" >&7; echo "next ks 0" >&7
 ok "  two queued clicks run in order (Arcade -> Kitchen speaker -> Pixel)" 'waitline next 3 && [[ $(grep "\"kind\": \"next\"" "$TMP/serve.out" | tail -1 | jq -r .device.name) == "Pixel 10 Pro" ]]'
+echo "to ar 0" >&7
+ok "  to ar: answers a next line, Arcade active" 'waitline next 4 && [[ $(grep "\"kind\": \"next\"" "$TMP/serve.out" | tail -1 | jq -r ".state + \"|\" + .device.name") == "ok|Arcade" ]]'
+"$B" disable ks >/dev/null
+echo "next ar 0" >&7
+ok "  a device turned off while the helper runs is skipped on the next click (Arcade -> Pixel, not Kitchen speaker)" 'waitline next 5 && [[ $(grep "\"kind\": \"next\"" "$TMP/serve.out" | tail -1 | jq -r ".device.name + \"|\" + (.devices[] | select(.id == \"ks\") | .enabled | tostring)") == "Pixel 10 Pro|false" ]]'
+"$B" enable ks >/dev/null
 ok "  timing log: click line with stages, no ids or tokens, 600" 'for _ in $(seq 40); do grep -q "\"event\": \"click\"" "$SD/timing.log" 2>/dev/null && break; sleep 0.1; done; grep "\"event\": \"click\"" "$SD/timing.log" | jq -e "has(\"put\") and has(\"click_to_widget\") and has(\"cache_write\")" >/dev/null && ! grep -qE "\"(ar|xps|ks|px)\"|acc-|ref-" "$SD/timing.log" && [[ $(perm "$SD/timing.log") == 600 ]]'
 ok "  timing log: handoff line (Spotify reports the target playing)" 'for _ in $(seq 60); do grep -q "\"event\": \"handoff\"" "$SD/timing.log" && break; sleep 0.1; done; grep "\"event\": \"handoff\"" "$SD/timing.log" | head -1 | jq -e ".since_put_done_active != null" >/dev/null'
 exec 7>&-

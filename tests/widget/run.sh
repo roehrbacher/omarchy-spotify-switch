@@ -1,11 +1,14 @@
 #!/bin/bash
-# timon.spotify-switch bar icon in an offscreen, software-rendered Quickshell
-# with the real backend against the fake Spotify: cached state shows before
-# Spotify answers, a click shows the next device at once and the backend
-# follows, rapid clicks end on the last target, no hover tooltip, 403 Premium
-# and one-device clicks give a notification (stub notify-send), logged-out
-# state arrives via the cache file watch and a click then runs the login
-# (stub). Saves PNGs of the icon when asked. Temp XDG dirs only.
+# timon.spotify-switch bar icon and popup in an offscreen, software-rendered
+# Quickshell with the real backend against the fake Spotify: cached state
+# shows before Spotify answers, a right click shows the next device at once
+# and the backend follows, rapid clicks end on the last target, no hover
+# tooltip; a left click opens the popup (device list, active row, a row click
+# moves playback there), 403 Premium / no devices / logged out show in the
+# popup, closed-popup problems give a notification (stub notify-send), the
+# login runs from a right click or the popup (stub). The real qs.Ui is used
+# except KeyboardPanel (layer-shell), replaced by tests/stubs/KeyboardPanel.qml.
+# Saves PNGs when asked. Temp XDG dirs only.
 #   bash tests/widget/run.sh [shots-dir]
 #   OMARCHY_SHELL=<omarchy>/shell   Omarchy's shell sources (default /usr/share/omarchy/shell)
 set -u
@@ -34,23 +37,36 @@ chmod +x "$tmp/stub/"*
 export SW_NOTIFY=$tmp/stub/notify
 export SPOTIFY_SWITCH_API=$F SPOTIFY_SWITCH_ACCOUNTS=$F PATH="$tmp/stub:$root/bin:$PATH"
 fake() { curl -s -X POST --data "$1" "$F/test/state" >/dev/null; }
-dev() { printf '{"id":"%s","name":"%s","type":"Computer","is_active":%s}' "$1" "$2" "${3:-false}"; }
+dev() { printf '{"id":"%s","name":"%s","type":"%s","is_active":%s}' "$1" "$2" "${4:-Computer}" "${3:-false}"; }
 echo '{"client_id":"test-client","order":["Pixel","gaming PC","XPS"],"icon":"devices"}' >"$XDG_CONFIG_HOME/timon-spotify-switch/config.json"
 SD=$XDG_STATE_HOME/timon-spotify-switch; mkdir -p "$SD"; chmod 700 "$SD"
 printf '{"access_token":"acc-0","refresh_token":"ref-0","expires_at":%d}\n' $(( $(date +%s) + 3600 )) >"$SD/token.json"; chmod 600 "$SD/token.json"
-fake "{\"devices\":[$(dev xps XPS true),$(dev pc 'gaming PC'),$(dev px 'Pixel 10 Pro'),$(dev ks 'Kitchen speaker'),$(dev ar Arcade)],\"playing\":true}"
+fake "{\"devices\":[$(dev xps XPS true),$(dev pc 'gaming PC'),$(dev px 'Pixel 10 Pro' false Smartphone),$(dev ks 'Kitchen speaker' false Speaker),$(dev ar Arcade false GameConsole)],\"playing\":true}"
 omarchy-spotify-switch status >/dev/null               # last session's cache
 fake '{"force":{"GET /v1/me/player/devices":[{"delay":1.5},{"delay":1.5}]}}'   # first reads (two bar entries) are slow
-ln -s "$shell/Commons" "$tmp/qs/Commons"; ln -s "$shell/Ui" "$tmp/qs/Ui"
+ln -s "$shell/Commons" "$tmp/qs/Commons"; cp -a "$shell/Ui" "$tmp/qs/Ui"
+cp "$root/tests/stubs/KeyboardPanel.qml" "$tmp/qs/Ui/KeyboardPanel.qml"
 cp "$here/shell.qml" "$tmp/qs/shell.qml"
 export SW_SRC=$root/plugin/timon.spotify-switch SW_SHOTS=${1:-$tmp}
 mkdir -p "$SW_SHOTS"
-QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software setsid timeout -s KILL 60 quickshell -p "$tmp/qs/shell.qml" >"$tmp/out" 2>&1 &
+QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software setsid stdbuf -oL -eL timeout -s KILL 120 quickshell -p "$tmp/qs/shell.qml" >"$tmp/out" 2>&1 &
 qs=$!
-for _ in $(seq 500); do
+for _ in $(seq 1200); do
   if grep -q 'SW CTL premium' "$tmp/out" && [[ ! -e $tmp/c1 ]]; then touch "$tmp/c1"
     fake '{"force":{"PUT /v1/me/player":[{"status":403,"body":{"error":{"status":403,"message":"Player command failed: Premium required","reason":"PREMIUM_REQUIRED"}}}]}}'; fi
+  if grep -q 'SW CTL slowput' "$tmp/out" && [[ ! -e $tmp/c6 ]]; then touch "$tmp/c6"; fake '{"force":{"PUT /v1/me/player":[{"delay":1.2}]}}'; fi
+  if grep -q 'SW CTL premium2' "$tmp/out" && [[ ! -e $tmp/c5 ]]; then touch "$tmp/c5"
+    fake '{"force":{"PUT /v1/me/player":[{"status":403,"body":{"error":{"status":403,"message":"Player command failed: Premium required","reason":"PREMIUM_REQUIRED"}}}]}}'; fi
   if grep -q 'SW CTL single' "$tmp/out" && [[ ! -e $tmp/c2 ]]; then touch "$tmp/c2"; fake "{\"devices\":[$(dev xps XPS true)]}"; fi
+  if grep -q 'SW CTL empty' "$tmp/out" && [[ ! -e $tmp/c4 ]]; then touch "$tmp/c4"; fake '{"devices":[]}'; fi
+  if grep -q 'SW CTL pause' "$tmp/out" && [[ ! -e $tmp/c7 ]]; then touch "$tmp/c7"
+    fake "{\"devices\":[$(dev xps XPS),$(dev pc 'gaming PC' true),$(dev px 'Pixel 10 Pro' false Smartphone),$(dev ks 'Kitchen speaker' false Speaker),$(dev ar Arcade false GameConsole)],\"playing\":false}"; fi
+  if grep -q 'SW CTL play' "$tmp/out" && [[ ! -e $tmp/c8 ]]; then touch "$tmp/c8"
+    fake "{\"devices\":[$(dev xps XPS),$(dev pc 'gaming PC' true),$(dev px 'Pixel 10 Pro' false Smartphone),$(dev ks 'Kitchen speaker' false Speaker),$(dev ar Arcade false GameConsole)],\"playing\":true}"; fi
+  if grep -q 'SW CTL drop-arcade' "$tmp/out" && [[ ! -e $tmp/c9 ]]; then touch "$tmp/c9"
+    fake "{\"devices\":[$(dev xps XPS),$(dev pc 'gaming PC' true),$(dev px 'Pixel 10 Pro' false Smartphone),$(dev ks 'Kitchen speaker' false Speaker)],\"playing\":true}"; fi
+  if grep -q 'SW CTL restore' "$tmp/out" && [[ ! -e $tmp/c10 ]]; then touch "$tmp/c10"
+    fake "{\"devices\":[$(dev xps XPS),$(dev pc 'gaming PC' true),$(dev px 'Pixel 10 Pro' false Smartphone),$(dev ks 'Kitchen speaker' false Speaker),$(dev ar Arcade false GameConsole)],\"playing\":true}"; fi
   if grep -q 'SW CTL logout' "$tmp/out" && [[ ! -e $tmp/c3 ]]; then touch "$tmp/c3"; omarchy-spotify-switch logout >/dev/null; fi
   grep -q 'SW RESULT' "$tmp/out" && break; kill -0 $qs 2>/dev/null || break; sleep 0.1
 done
@@ -61,6 +77,7 @@ chk "notify-send got the Premium reason" 'grep -qx "Premium needed to switch dev
 chk "notify-send got the one-device note" 'grep -qx "XPS (only device available)" "$tmp/notices" 2>/dev/null'
 chk "logged-out click ran the login helper" '[[ -e $tmp/login-ran ]]'
 chk "a failed login is notified" 'grep -qx "login did not finish (run omarchy-spotify-switch-login)" "$tmp/notices" 2>/dev/null'
+chk "the turned-off device is saved in config.json: id and name, mode 600, client ID kept" '[[ $(jq -c .disabled "$XDG_CONFIG_HOME/timon-spotify-switch/config.json") == "[{\"id\":\"ar\",\"name\":\"Arcade\"}]" && $(stat -c %a "$XDG_CONFIG_HOME/timon-spotify-switch/config.json") == 600 && $(jq -r .client_id "$XDG_CONFIG_HOME/timon-spotify-switch/config.json") == test-client && $(ls -A "$XDG_CONFIG_HOME/timon-spotify-switch" | wc -l) == 1 ]]'
 grep -E 'SW |rror|warn' "$tmp/out" | grep -v -e qt.qpa -e "SW CTL"
 p=$(grep -c ' ok$' "$tmp/out"); f=$(grep -c 'want=.* FAIL$' "$tmp/out")
 [[ -n ${1:-} ]] && ls "$SW_SHOTS"/[0-9]-*.png 2>/dev/null | sed 's/^/shot: /'

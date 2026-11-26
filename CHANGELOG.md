@@ -2,6 +2,74 @@
 
 Versions match `manifest.json` and `VERSION`; each commit subject starts with its version.
 
+## 0.3.0
+
+- Left click opens a popup of your Spotify Connect devices; right click
+  still switches to the next enabled device. Each row has a switch to
+  never switch to that device. Taglines name the state, the bar icon
+  greys out when there is no other device to switch to, and the popup
+  keeps a fixed size. While the popup is open, Spotify is re-read every
+  10 seconds.
+- The bar icon (and the popup heading glyph) is now nf-md-monitor_cellphone
+  (U+F0989).
+
+## 0.2.3
+
+- While the popup is open, Spotify is re-read every 10 seconds (and not
+  while a switch or a row switch is in flight). The 5-minute read still
+  runs only while the popup is closed. The tagline and the list follow a
+  status change at once, without closing and reopening.
+- Taglines: paused is "Paused · switching keeps it paused"; no session is
+  "Nothing playing"; every device off is "All devices are turned off";
+  logged out / no client ID are short; offline, busy and error are one
+  line, "Can't reach Spotify". "No other device to switch to" still wins
+  over the playing or paused hint.
+
+## 0.2.2
+
+- The popup heading is "Spotify Device Switcher" and the line under it is a
+  tagline per state, e.g. "Right click the icon to switch" while another
+  device is on (list in the README).
+- The bar icon is dimmed when there is no other enabled device to switch to
+  (phone offline, the rest turned off, or only one device). It follows
+  status reads and the switches.
+- The popup keeps its size in every state: no message line any more.
+  Messages replace the tagline for a few seconds, and the help line under
+  the list is always the same text. Clicking a turned-off or restricted row
+  does nothing and shows no text.
+
+## 0.2.1
+
+- Every device row in the popup ends in a switch (all on by default). Turn a
+  device off and the switcher never moves playback to it: the right click
+  skips it, the popup shows it dimmed ("Skipped") and doesn't let you pick
+  it until you turn it back on. The device playing right now stays
+  highlighted ("Playing · skipped") and the right click goes on from its
+  place to the next device that is on. With every device off the right click
+  says so and nothing moves.
+- Keyboard: Right/Left move between a row and its switch, Space turns a
+  device on or off, Enter picks it (on the switch: turns it on or off).
+- The setting is the `disabled` list in `config.json` (id and name; matches by
+  id, by name when Spotify gave the device a new id), saved atomically with
+  mode 600. New commands `omarchy-spotify-switch enable ID` / `disable ID`.
+
+## 0.2.0
+
+- Left click now opens a popup with your Spotify Connect devices, built
+  from Omarchy's stock panel parts (Bluetooth popup width, theme font and
+  colours, keyboard: `j`/`k`, Enter, Esc, Tab, `r`). It shows the current
+  state, each device with its type glyph, the active one highlighted, and
+  restricted devices dimmed. Clicking a device moves playback there with
+  the play state kept; the row says "Switching…" until Spotify answers.
+  Empty, logged-out (with a login row), no-client-ID, Premium, offline and
+  busy states are shown in the popup.
+- Right click does what left click did before: move playback to the next
+  device.
+- While the popup is open, problems show in it instead of a notification.
+- New backend command `omarchy-spotify-switch to ID` (and `to ID` on the
+  helper's stdin): move playback to that device. A device that is gone is
+  reported with the fresh list; it never falls back to another device.
+
 ## 0.1.6
 
 - No hover tooltip on the bar icon any more, like Omarchy's own bar icons.

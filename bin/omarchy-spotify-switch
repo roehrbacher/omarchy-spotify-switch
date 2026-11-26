@@ -3,13 +3,20 @@
 
   omarchy-spotify-switch status            JSON: current device, all devices, cycle order
   omarchy-spotify-switch next [--from ID]  move playback to the next device in the cycle
+  omarchy-spotify-switch to ID             move playback to that device (the popup's choice)
+  omarchy-spotify-switch disable ID        never switch to that device (config "disabled")
+  omarchy-spotify-switch enable ID         switch to that device again
   omarchy-spotify-switch serve             the bar's helper: commands on stdin, JSON lines out
   omarchy-spotify-switch login             browser login (Authorization Code + PKCE)
   omarchy-spotify-switch logout            forget the saved tokens
   omarchy-spotify-switch cached            last known status (no network)
 
 Config  $XDG_CONFIG_HOME/timon-spotify-switch/config.json
-          {"client_id": "...", "order": ["Pixel", "gaming PC", "XPS"], "timing": false}
+          {"client_id": "...", "order": ["Pixel", "gaming PC", "XPS"], "timing": false,
+           "disabled": [{"id": "<device id>", "name": "Kurt's Fire TV"}]}
+        "disabled": devices the switcher never moves playback to (the right click
+        skips them, the popup refuses them). An entry matches by device id; when
+        that id is not in Spotify's list any more, by device name instead.
         SPOTIFY_SWITCH_CLIENT_ID overrides client_id; SPOTIFY_SWITCH_TIMING=1 or
         "timing": true logs each click's stages to timing.log in the state dir.
 Tokens  $XDG_STATE_HOME/timon-spotify-switch/token.json (dir 700, file 600)
@@ -119,6 +126,56 @@ def read_json(path):
 def config():
     c = read_json(CONFIG)
     return c if isinstance(c, dict) else {}
+
+
+def write_config(cfg):
+    """Atomic write of config.json, mode 600 (it holds the client ID)."""
+    os.makedirs(CONFIG_DIR, mode=0o700, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=CONFIG_DIR, prefix=".tmp-")
+    try:
+        with os.fdopen(fd, "w") as f:
+            os.fchmod(f.fileno(), 0o600)
+            json.dump(cfg, f, indent=2, ensure_ascii=False)
+            f.write("\n")
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, CONFIG)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def entry_parts(entry):
+    """(id, casefolded name) of a "disabled" entry: {"id", "name"} or a bare
+    string (matches an id or a name). Anything else matches nothing."""
+    if isinstance(entry, str):
+        return entry, entry.casefold()
+    if isinstance(entry, dict):
+        i, n = entry.get("id"), entry.get("name")
+        return (i if isinstance(i, str) else ""), (n.casefold() if isinstance(n, str) else "")
+    return "", ""
+
+
+def entry_matches(entry, dev, known_ids):
+    """By device id; by name only when the entry's id is not in Spotify's
+    list (ids can change, names are what you recognise)."""
+    eid, ename = entry_parts(entry)
+    if eid and eid == dev["id"]:
+        return True
+    return bool(ename) and ename == dev["name"].casefold() and eid not in known_ids
+
+
+def mark_enabled(devs):
+    """Set d["enabled"] on every device from the config's "disabled" list."""
+    entries = config().get("disabled")
+    entries = entries if isinstance(entries, list) else []
+    ids = {d["id"] for d in devs}
+    for d in devs:
+        d["enabled"] = not any(entry_matches(e, d, ids) for e in entries)
+    return devs
 
 
 def client_id():
@@ -363,18 +420,36 @@ def cycle(devs, order=None):
     order = order if order is not None else (config().get("order") or [])
     if not isinstance(order, list):
         order = []
-    return sorted(devs, key=lambda d: (rank(d["name"], order), d["name"].casefold(), d["id"]))
+    return mark_enabled(sorted(devs, key=lambda d: (rank(d["name"], order), d["name"].casefold(), d["id"])))
+
+
+def can_target(d):
+    return not d["restricted"] and d.get("enabled", True)
+
+
+def no_target_message(ordered, current):
+    """Why a right click has nowhere to go."""
+    free = [d for d in ordered if not d["restricted"]]
+    off = [d for d in free if not d.get("enabled", True)]
+    who = current["name"] if current else "this device"
+    if off and len(off) == len(free):
+        return "Spotify: all devices are turned off (left click to turn one on)"
+    if off:
+        return "Spotify: %s (only enabled device)" % who
+    return "Spotify: %s (only device available)" % who
 
 
 def next_device(ordered, from_id=None):
-    """The device after from_id (or the active one), wrapping; restricted
-    devices are skipped. None active -> the first one. Returns (target, current)."""
+    """The device after from_id (or the active one), wrapping; restricted and
+    disabled devices are skipped (the current one may be disabled: the cycle
+    still starts from its place). None active -> the first one. Returns
+    (target, current)."""
     current = None
     if from_id:
         current = next((d for d in ordered if d["id"] == from_id), None)
     if current is None:
         current = next((d for d in ordered if d["active"]), None)
-    usable = [d for d in ordered if not d["restricted"]]
+    usable = [d for d in ordered if can_target(d)]
     if not usable:
         return None, current
     if current is None:
@@ -382,7 +457,7 @@ def next_device(ordered, from_id=None):
     i = ordered.index(current)
     for k in range(1, len(ordered) + 1):
         d = ordered[(i + k) % len(ordered)]
-        if not d["restricted"] and d is not current:
+        if can_target(d) and d is not current:
             return d, current
     return None, current  # current is the only usable device
 
@@ -390,13 +465,18 @@ def next_device(ordered, from_id=None):
 # ---------- results ----------
 
 def result(state, ordered, message=None, current=None, playing=None, transfer=None):
+    mark_enabled(ordered)  # the setting may have changed while Spotify answered
     active = current or next((d for d in ordered if d["active"]), None)
     nxt, _ = next_device(ordered, active["id"] if active else None) if ordered else (None, None)
     if message is None:
         if state == "ok" and active:
             message = "Spotify: " + active["name"]
+        elif state == "ok" and nxt:
+            message = "Spotify: no active device, click to play on " + nxt["name"]
+        elif state == "ok" and any(not d["restricted"] for d in ordered):
+            message = "Spotify: all devices are turned off"
         elif state == "ok":
-            message = "Spotify: no active device, click to play on " + nxt["name"] if nxt else "Spotify: no device"
+            message = "Spotify: no device"
         else:
             message = "Spotify: no device (open Spotify on a device)"
     out = {
@@ -448,6 +528,12 @@ def save(out, started_ms):
     out["updated_ms"] = now_ms()
     try:
         with Lock():
+            # A switch turned on/off while Spotify answered (set_enabled holds
+            # this lock while it writes): what is printed and cached agrees.
+            if valid_devices(out.get("devices")) and out["devices"]:
+                mark_enabled(out["devices"])
+                active = next((d for d in out["devices"] if d.get("active")), None)
+                out["next"] = next_device(out["devices"], active["id"] if active else None)[0]
             last = read_json(CACHE) or {}
             if int(last.get("updated_ms") or 0) <= started_ms:
                 write_private(CACHE, out)
@@ -460,8 +546,9 @@ def read_status(margin=TOKEN_MARGIN):
     Spotify can still name the old device; the transfer's target wins then."""
     started = now_ms()
     try:
-        ordered = cycle(devices(margin=margin))
+        raw = devices(margin=margin)
         playing, active_id = player(margin=margin)
+        ordered = cycle(raw)  # after the reads, so the freshest "disabled" setting counts
         last = read_json(CACHE) or {}
         tr = last.get("transfer") if isinstance(last.get("transfer"), dict) else None
         lagging = active_id is None or active_id == tr.get("from") if tr else False
@@ -479,9 +566,26 @@ def read_status(margin=TOKEN_MARGIN):
     return out
 
 
-def click(from_id=None, t_click=None):
-    """Move playback to the next device. Uses the cached device list and play
-    state when they are fresh enough, so the click path is one PUT."""
+def pick(ordered, to_id):
+    """(target, current, message) for a chosen device: message is set when
+    there is nothing to transfer (gone, restricted, already active)."""
+    current = next((d for d in ordered if d["active"]), None)
+    target = next((d for d in ordered if d["id"] == to_id), None)
+    if target is None:
+        return None, current, "Spotify: that device is no longer available"
+    if target["restricted"]:
+        return None, current, "Spotify: %s can't be controlled from here" % target["name"]
+    if current is not None and current["id"] == target["id"]:
+        return None, current, "Spotify: " + target["name"]
+    if not target.get("enabled", True):
+        return None, current, "Spotify: %s is turned off for switching" % target["name"]
+    return target, current, None
+
+
+def click(from_id=None, t_click=None, to_id=None):
+    """Move playback to the next device, or to to_id (the popup's choice).
+    Uses the cached device list and play state when they are fresh enough, so
+    the click path is one PUT. The play state is kept either way."""
     started = now_ms()
     st = {"queued": started - t_click if t_click else None}
     try:
@@ -500,11 +604,26 @@ def click(from_id=None, t_click=None):
             out = result("no_device", ordered)
             save(out, started)
             return out, st
-        target, current = next_device(ordered, from_id)
+        if to_id:
+            target, current, note = pick(ordered, to_id)
+            if note and "get_devices" not in st and not any(d["id"] == to_id for d in ordered):
+                # Not in the cached list: read it once before giving up.
+                t = time.perf_counter()
+                ordered = cycle(devices())
+                st["get_devices"] = round((time.perf_counter() - t) * 1000)
+                playing = None
+                target, current, note = pick(ordered, to_id)
+            if note:
+                out = result("ok" if ordered else "no_device", ordered, current=current,
+                             playing=last.get("playing"), message=note)
+                if "get_devices" in st:
+                    save(out, started)
+                return out, st
+        else:
+            target, current = next_device(ordered, from_id)
         if target is None:
-            who = current["name"] if current else "this device"
             out = result("ok", ordered, current=current, playing=last.get("playing"),
-                         message="Spotify: %s (only device available)" % who)
+                         message=no_target_message(ordered, current))
             return out, st
         if playing is None:
             # Old cache: ask once. Keeps the play state: playing stays playing,
@@ -521,6 +640,14 @@ def click(from_id=None, t_click=None):
         t = time.perf_counter()
         status, _ = api("PUT", "/v1/me/player", body=body)
         st["put"] = round((time.perf_counter() - t) * 1000)
+        if status == 404 and to_id:
+            # The chosen device left Spotify Connect: show the fresh list, no
+            # surprise move to another device.
+            ordered = cycle(devices())
+            out = result("ok" if ordered else "no_device", ordered,
+                         message="Spotify: %s is no longer available" % target["name"])
+            save(out, started)
+            return out, st
         if status == 404:
             # The device left Spotify Connect: read the list again, once.
             t = time.perf_counter()
@@ -593,6 +720,76 @@ def cmd_next(from_id=None):
         timing("cli-next", **st)
 
 
+def cmd_to(to_id):
+    out, st = click(to_id=to_id)
+    print(json.dumps(out))
+    sys.stdout.flush()
+    if out.get("transfer"):
+        timing("cli-to", **st)
+
+
+def set_enabled(dev_id, enabled):
+    """Turn a device on or off for switching: update config.json's "disabled"
+    list (atomic, mode 600) and the cached status the bars show. The entry
+    holds the device id and name, so it still matches if Spotify hands the
+    device a new id. Returns the cached device (or None when it is unknown)."""
+    with Lock():
+        cache = read_json(CACHE)
+        cache = cache if isinstance(cache, dict) else {}
+        devs = cache.get("devices") if valid_devices(cache.get("devices")) else []
+        dev = next((d for d in devs if d["id"] == dev_id), None)
+        ref = dev or {"id": dev_id, "name": ""}
+        if os.path.exists(CONFIG):
+            try:
+                with open(CONFIG) as f:
+                    cfg = json.load(f)
+            except (OSError, ValueError):
+                cfg = None
+            if not isinstance(cfg, dict):
+                raise Fail("error", "Spotify: config.json is not valid JSON, left unchanged")
+        else:
+            cfg = {}
+        entries = cfg.get("disabled")
+        entries = list(entries) if isinstance(entries, list) else []
+        ids = {d["id"] for d in devs} | {dev_id}
+        hits = [e for e in entries if entry_matches(e, ref, ids)]
+        if enabled:
+            entries = [e for e in entries if not any(e is h for h in hits)]
+        elif not hits:
+            entries.append({"id": dev_id, "name": ref["name"]})
+        else:
+            for e in hits:  # a name match: remember the id it has now
+                if isinstance(e, dict):
+                    e["id"] = dev_id
+                    if ref["name"]:
+                        e["name"] = ref["name"]
+        if entries:
+            cfg["disabled"] = entries
+        else:
+            cfg.pop("disabled", None)
+        write_config(cfg)
+        if devs and cache.get("state") == "ok":
+            ordered = cycle([dict(d) for d in devs])
+            active = next((d for d in ordered if d.get("active")), None)
+            cache["devices"] = ordered
+            cache["next"] = next_device(ordered, active["id"] if active else None)[0]
+            cache["updated_ms"] = now_ms()
+            cache["updated"] = int(time.time())
+            write_private(CACHE, cache)
+    return dev
+
+
+def cmd_set_enabled(dev_id, enabled):
+    try:
+        dev = set_enabled(dev_id, enabled)
+    except (Fail, OSError) as e:
+        print(e.message if isinstance(e, Fail) else "Spotify: could not save the setting (%s)" % e.strerror,
+              file=sys.stderr)
+        return 1
+    print(json.dumps({"id": dev_id, "name": dev["name"] if dev else None, "enabled": enabled}))
+    return 0
+
+
 def cmd_cached():
     out = read_json(CACHE)
     print(json.dumps(out if isinstance(out, dict) else {"state": "unknown", "tooltip": "Spotify", "devices": []}))
@@ -604,6 +801,7 @@ def cmd_serve():
     """Line protocol on stdin (one bar widget per process):
          status                 read Spotify in the background, answer a status line
          next <from-id|-> [ms]  click: answer a next line (ms = the widget's click time)
+         to <device-id> [ms]    the popup's choice: answer a next line too
          seen <ms> <ms>         timing mode: the widget got the answer (click time, now)
        Answers: one JSON object per line with "kind": "status" | "next".
        Exits when stdin closes (the shell went away)."""
@@ -642,9 +840,9 @@ def cmd_serve():
             with clicks_cv:
                 while not clicks:
                     clicks_cv.wait()
-                from_id, t_click = clicks.pop(0)
+                from_id, t_click, to_id = clicks.pop(0)
             try:
-                out, st = click(from_id, t_click)
+                out, st = click(from_id, t_click, to_id)
             except Exception as e:  # noqa: BLE001
                 out, st = unexpected(e), {}
             t_sent = send("next", out, {"click_ms": t_click})
@@ -677,7 +875,12 @@ def cmd_serve():
             from_id = parts[1] if len(parts) > 1 and parts[1] != "-" else None
             t_click = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else None
             with clicks_cv:
-                clicks.append((from_id, t_click))
+                clicks.append((from_id, t_click, None))
+                clicks_cv.notify()
+        elif parts[0] == "to" and len(parts) > 1:
+            t_click = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else None
+            with clicks_cv:
+                clicks.append((None, t_click, parts[1]))
                 clicks_cv.notify()
         elif parts[0] == "seen" and len(parts) >= 3 and parts[1].isdigit() and parts[2].isdigit():
             t_click, t_seen = int(parts[1]), int(parts[2])
@@ -809,6 +1012,10 @@ def main(argv):
     elif cmd == "next":
         from_id = argv[3] if len(argv) > 3 and argv[2] == "--from" else None
         cmd_next(from_id)
+    elif cmd == "to" and len(argv) > 2:
+        cmd_to(argv[2])
+    elif cmd in ("enable", "disable") and len(argv) > 2:
+        return cmd_set_enabled(argv[2], cmd == "enable")
     elif cmd == "serve":
         return cmd_serve()
     elif cmd == "cached":
