@@ -2,6 +2,16 @@
 
 Versions match `manifest.json` and `VERSION`; each commit subject starts with its version.
 
+## 0.3.1
+
+- Right-clicking the big icon in the popup heading shows a short joke in
+  the tagline (the switch is the icon in the bar). Another click gives
+  the next line; the real tagline comes back after a few seconds, or at
+  once if you actually switch.
+- The bar icon (and the popup heading glyph) is nf-md-monitor_speaker
+  (U+F0F5F) again. It is still dimmed when there is no other enabled,
+  controllable device to switch to.
+
 ## 0.3.0
 
 - Left click opens a popup of your Spotify Connect devices; right click

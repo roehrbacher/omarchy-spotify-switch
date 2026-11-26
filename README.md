@@ -138,11 +138,12 @@ text:
 
 ## Icon
 
-The icon is the Nerd Font glyph nf-md-monitor_cellphone (U+F0989, a monitor
-with a phone) from the font the bar already uses, so it follows the theme
-colour and the stock dim/lit states. It is fixed; an `"icon"` key left over
-in `config.json` or in a bar entry is ignored. The same glyph is in the
-popup heading.
+The icon is the Nerd Font glyph nf-md-monitor_speaker (U+F0F5F) from the
+font the bar already uses, so it follows the theme colour and the stock
+dim/lit states. It is fixed; an `"icon"` key left over in `config.json` or
+in a bar entry is ignored. The same glyph is in the popup heading. When
+there is no other enabled, controllable device to switch to, the icon is
+dimmed; there is no second glyph for that state.
 
 ## Speed
 

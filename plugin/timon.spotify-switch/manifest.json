@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "timon.spotify-switch",
   "name": "Spotify Switcher",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "author": "Timon Röhrbacher",
   "description": "One bar icon: left click lists your Spotify Connect devices to pick one, right click moves playback to the next enabled device; each device has a switch to never switch to it",
   "kinds": [

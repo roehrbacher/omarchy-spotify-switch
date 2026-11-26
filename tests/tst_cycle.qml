@@ -117,4 +117,14 @@ TestCase {
     compare(Cycle.heroStatus({ state: "ok", playing: true, devices: [off("xps")] }, { id: "xps", name: "XPS" }, false), "All devices are turned off")
     compare(Cycle.heroStatus({ state: "ok", playing: false, devices: [d("a"), d("b")] }, { id: "a", name: "A" }, false), "Paused · switching keeps it paused")
   }
+  function test_headerEggLines() {
+    var lines = Cycle.headerEggLines()
+    compare(lines.length, 5)
+    var seen = {}
+    for (var i = 0; i < lines.length; i++) {
+      verify(String(lines[i]).length > 0)
+      verify(!seen[lines[i]])
+      seen[lines[i]] = true
+    }
+  }
 }

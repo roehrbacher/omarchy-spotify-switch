@@ -44,8 +44,8 @@ Panel {
   readonly property string cacheFile: (Quickshell.env("XDG_STATE_HOME") || (Quickshell.env("HOME") + "/.local/state"))
     + "/timon-spotify-switch/status.json"
   readonly property real refreshMinutes: Number(root.setting("refreshMinutes", 5))
-  // Fixed icon: nf-md-monitor_cellphone (U+F0989) from the bar's Nerd Font.
-  readonly property string icon: String.fromCodePoint(0xF0989)
+  // Fixed icon: nf-md-monitor_speaker (U+F0F5F) from the bar's Nerd Font.
+  readonly property string icon: String.fromCodePoint(0xF0F5F)
   // Desktop notification for click feedback; the text is appended.
   property var notifyCommand: ["notify-send", "--app-name=Spotify Switcher", "Spotify Switcher"]
   property string lastNotice: ""
@@ -65,8 +65,11 @@ Panel {
   // A note for the open popup (a choice that could not be made, a click's
   // answer); cleared when it opens again.
   property string panelNote: ""
-  // Clears the note so the state's tagline comes back.
-  Timer { id: noteTimer; interval: 4000; onTriggered: root.panelNote = "" }
+  // Clears the note so the state's tagline comes back. Tests may shorten noteMs.
+  property int noteMs: 4000
+  property bool eggOn: false
+  property int eggAt: 0
+  Timer { id: noteTimer; interval: Math.max(1, root.noteMs); onTriggered: { root.panelNote = ""; root.eggOn = false } }
   // What a click already told at once (so its answer does not tell it twice).
   property string toldForClick: ""
   property real lastRead: 0
@@ -140,9 +143,11 @@ Panel {
     if (!Array.isArray(s.devices)) s.devices = []
     // Replacing the object (not mutating fields) is what makes the tagline
     // and the list rebind.
+    var prev = Cycle.heroStatus(root.st, root.shown, false)
     root.st = s
     root.shown = s.device || null
     root.clickNote = ""
+    if (root.eggOn && Cycle.heroStatus(root.st, root.shown, false) !== prev) root.setNote("")
   }
 
   function notice(text) {
@@ -156,8 +161,18 @@ Panel {
   // says the tagline already tells it. Closed: a notification with the text.
   function setNote(t) {
     root.panelNote = String(t || "")
+    root.eggOn = false
     if (root.panelNote !== "") noteTimer.restart()
     else noteTimer.stop()
+  }
+  // Right click on the popup heading glyph: a joke, then the real tagline
+  // comes back (4 s, or at once on a real switch or status change).
+  function headerEgg() {
+    var lines = Cycle.headerEggLines()
+    var i = ((root.eggAt % lines.length) + lines.length) % lines.length
+    root.eggAt = i + 1
+    root.setNote(lines[i])
+    root.eggOn = true
   }
   function tell(text, brief) {
     if (!root.opened) { root.notice(String(text || "")); return }
@@ -201,6 +216,7 @@ Panel {
 
   // Right click: the next device in the cycle.
   function click() {
+    root.setNote("")
     root.clickGen++
     root.dataGen++
     root.toldForClick = ""
@@ -522,12 +538,31 @@ Panel {
             foreground: root.foreground
             fontFamily: root.fontFamily
             iconComponent: Component {
-              Text {
-                textFormat: Text.PlainText
-                text: root.icon
-                color: root.lit ? root.foreground : root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.display
+              Item {
+                implicitWidth: glyph.implicitWidth
+                implicitHeight: glyph.implicitHeight
+                width: implicitWidth
+                height: implicitHeight
+                Text {
+                  id: glyph
+                  anchors.fill: parent
+                  textFormat: Text.PlainText
+                  text: root.icon
+                  color: root.lit ? root.foreground : root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.display
+                }
+                MouseArea {
+                  id: glyphHit
+                  objectName: "spotifySwitchHeroGlyph"
+                  anchors.fill: parent
+                  acceptedButtons: Qt.LeftButton | Qt.RightButton
+                  hoverEnabled: false
+                  function pressButton(b) {
+                    if (b === Qt.RightButton) root.headerEgg()
+                  }
+                  onPressed: function(mouse) { pressButton(mouse.button) }
+                }
               }
             }
           }

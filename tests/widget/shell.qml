@@ -60,6 +60,18 @@ ShellRoot {
   function rowByName(n) { var r = rows(); for (var i = 0; i < r.length; i++) if (r[i].dev && r[i].dev.name === n) return r[i]; return null }
   function rowClick(r) { for (var i = 0; i < r.children.length; i++) if (r.children[i].hoverEnabled !== undefined) { r.children[i].clicked(null); return } }
   function vis(name) { var o = find(w, name); return !!o && o.visible && o.height > 0 }
+  function glyph() { return find(w, "spotifySwitchHeroGlyph") }
+  function metaLabel() {
+    var want = String(find(w, "spotifySwitchHero").meta || "").toUpperCase()
+    function walk(item) {
+      if (!item) return null
+      if (item.truncated !== undefined && String(item.text || "") === want) return item
+      var kids = item.children || []
+      for (var i = 0; i < kids.length; i++) { var r = walk(kids[i]); if (r) return r }
+      return null
+    }
+    return walk(find(w, "spotifySwitchHero"))
+  }
   // Popup size per state: a message must never change it.
   property var heights: ({})
   function hgt(label) { var h = heights; h[label] = Math.round(card().height) + "x" + Math.round(card().width) + "/" + Math.round(find(w, "spotifySwitchHero").height); heights = h }
@@ -102,8 +114,8 @@ ShellRoot {
     expect("Spotify read still running (shown without waiting)", w.reading, true)
     expect("icon lit", btn().dimmed, false)
     expect("helper (serve) running", w.helperUp, true)
-    expect("glyph nf-md-monitor_cellphone (fixed)", btn().text, String.fromCodePoint(0xF0989))
-    expect("2nd entry: leftover icon setting ignored", btn2().text, String.fromCodePoint(0xF0989))
+    expect("glyph nf-md-monitor_speaker (fixed)", btn().text, String.fromCodePoint(0xF0F5F))
+    expect("2nd entry: leftover icon setting ignored", btn2().text, String.fromCodePoint(0xF0F5F))
     expect("glyph really drawn (Nerd Font found, not a fallback box)", btn().glyphPaintedWidth >= 10, true)
     expect("both entries show the cached device", w2.shown ? w2.shown.name : "", "XPS")
     expect("both entries same slot width", btn2().width === btn().width, true)
@@ -194,13 +206,58 @@ ShellRoot {
   Timer { id: live6; interval: 400; onTriggered: { w.refresh(); live7.start() } }
   Timer { id: live7; interval: 1500; onTriggered: {
     expect("list restored, still open", w.opened + " | " + rows().length, "true | 5")
+    egg0.start() } }
+
+  // ---------------- popup: right click the heading glyph (easter egg) ----------------
+  readonly property var eggLines: [
+    "Wrong icon, captain · try the one up top",
+    "Not this one · right click the bar icon",
+    "Almost · the little one up top switches",
+    "This one's for show · try the bar icon",
+    "Nice try · the icon up top is the one"
+  ]
+  Timer { id: egg0; interval: 200; onTriggered: {
+    expect("heading glyph is a click target", !!glyph(), true)
+    var shown = w.shown.name, gen = w.clickGen, n = w.noticeCount, tips = barStub.tipShows
+    var h0 = Math.round(card().height)
+    glyph().pressButton(Qt.LeftButton)
+    expect("left click on heading glyph: popup stays open, nothing switches", w.opened + " | " + w.shown.name + " | " + w.pending + " | " + w.clickGen, "true | " + shown + " | false | " + gen)
+    expect("left click on heading glyph: tagline unchanged", w.heroStatusText, "Right click the icon to switch")
+    expect("left click on heading glyph: no notification or tooltip", (w.noticeCount - n) + " " + (barStub.tipShows - tips), "0 0")
+    w.noteMs = 400
+    glyph().pressButton(Qt.RightButton)
+    expect("right click heading glyph: first joke in the tagline", w.heroStatusText, eggLines[0])
+    expect("right click heading glyph: nothing switches", w.shown.name + " | " + w.pending + " | " + w.clickGen, shown + " | false | " + gen)
+    expect("right click heading glyph: no notification or tooltip", (w.noticeCount - n) + " " + (barStub.tipShows - tips), "0 0")
+    expect("joke tagline is not elided", metaLabel() && !metaLabel().truncated, true)
+    expect("joke keeps the popup height", Math.round(card().height), h0)
+    hgt("egg")
+    egg1.h0 = h0; egg1.shown = shown; egg1.gen = gen
+    egg1.start() } }
+  Timer { id: egg1; interval: 700; property int h0: 0; property string shown: ""; property int gen: 0; onTriggered: {
+    expect("joke reverts to the real tagline after a short wait", w.heroStatusText, "Right click the icon to switch")
+    expect("reverted joke: still the same device, popup open", w.opened + " | " + w.shown.name + " | " + w.pending, "true | " + shown + " | false")
+    w.noteMs = 4000
+    w.eggAt = 0
+    var n = w.noticeCount, tips = barStub.tipShows
+    for (var i = 0; i < eggLines.length; i++) {
+      glyph().pressButton(Qt.RightButton)
+      expect("heading glyph joke " + (i + 1) + " of " + eggLines.length, w.heroStatusText, eggLines[i])
+      expect("  not elided", metaLabel() && !metaLabel().truncated, true)
+    }
+    glyph().pressButton(Qt.RightButton)
+    expect("heading glyph jokes wrap to the first line", w.heroStatusText, eggLines[0])
+    expect("rotated jokes: nothing switched, no notice or tooltip", w.shown.name + " | " + w.pending + " | " + w.clickGen + " | " + (w.noticeCount - n) + " " + (barStub.tipShows - tips), shown + " | false | " + gen + " | 0 0")
+    expect("rotated jokes: popup height unchanged", Math.round(card().height), h0)
+    shot("15-popup-header-egg")
     console.log("SW CTL slowput")
     p1b.start() } }
   Timer { id: p1b; interval: 400; onTriggered: {
+    expect("egg still showing just before a real switch", w.heroStatusText, eggLines[0])
     rowClick(rowByName("Pixel 10 Pro"))
     expect("row click: shows the choice at once", w.shown ? w.shown.name : "", "Pixel 10 Pro")
     expect("row click: row says Switching…", rowByName("Pixel 10 Pro").statusText, "Switching…")
-    expect("row click: hero says Switching to …", find(w, "spotifySwitchHero").meta, "Switching to Pixel 10 Pro")
+    expect("row click: egg gives way at once to Switching to …", find(w, "spotifySwitchHero").meta, "Switching to Pixel 10 Pro")
     expect("row click: popup stays open", w.opened, true)
     p1c.start() } }
   Timer { id: p1c; interval: 350; onTriggered: {

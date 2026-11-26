@@ -106,6 +106,19 @@ function heroStatus(st, shown, pending) {
   return s.playing ? "Right click the icon to switch" : "Paused · switching keeps it paused"
 }
 
+// Funny taglines for a right click on the popup heading glyph (the switch
+// is the bar icon). Shown in caps, one short line at a time, like the others.
+function headerEggLines() {
+  return [
+    "Wrong icon, captain · try the one up top",
+    "Not this one · right click the bar icon",
+    "Almost · the little one up top switches",
+    "This one's for show · try the bar icon",
+    "Nice try · the icon up top is the one"
+  ]
+}
+
+
 // Right-hand value of a device row (next to its switch).
 function rowStatus(dev, shownId, pendingId, playing) {
   if (!dev) return ""
